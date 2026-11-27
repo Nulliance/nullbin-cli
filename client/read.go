@@ -48,7 +48,6 @@ func (c *Client) Read(ctx context.Context, vl *link.ViewLink, opts ReadOptions) 
 		if err != nil {
 			return nil, err
 		}
-		hasPassword = prefix.Password
 
 		if opts.BeforeBurn != nil {
 			if err := opts.BeforeBurn(prefix); err != nil {

@@ -1,0 +1,19 @@
+# Gitleaks findings checked by hand and known not to be secrets.
+# Format: <commit>:<file>:<rule>:<line>. Each entry matches only that exact finding.
+
+# The password generator's character set (A-Z, a-z, and 2-9 without look-alikes), not a secret.
+168ee6e87f06c756262c5899d550a6ff31648abf:crypto/kdf.go:generic-api-key:39
+
+# Synthetic cross-language libsodium test vectors (generated test inputs, never real keys or tokens).
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:14
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:15
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:16
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:17
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:95
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:98
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:99
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:104
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:108
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:121
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:130
+168ee6e87f06c756262c5899d550a6ff31648abf:testdata/vectors/nullbin_vectors.json:generic-api-key:135

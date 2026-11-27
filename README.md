@@ -1,26 +1,28 @@
 # nullbin-cli
 
-The official command-line client and Go library for [**Nullbin**](https://github.com/Nulliance/nullbin-server), a zero-knowledge encrypted pastebin.
+The official command-line client and Go library for [Nullbin](https://github.com/Nulliance/nullbin-server).
 
-Nullbin's priorities are, in order: **security, then simplicity**.
+Encrypts and decrypts pastes locally so you do not have to trust website JavaScript served by a remote host. Works with any Nullbin server and produces links identical to the web app.
 
-## Security Highlights
+For hosting a server, protocol specifications, and paste limits, see [`Nulliance/nullbin-server`](https://github.com/Nulliance/nullbin-server).
 
-- **Zero-knowledge, client-side only:** All encryption, decryption, Argon2id key stretching, BLAKE2b subkey derivation, Padmé padding, and multi-file ZIP packing happen locally. The server only ever sees ciphertext and derived capability tokens.
-- **Eliminates browser JS trust (R1):** Unlike a web browser loading frontend JavaScript on every visit, a locally built/verified `nullbin-cli` binary runs audited, pinned cryptographic code — even if the remote frontend host or CDN is compromised.
-- **100% protocol compatible** with `Nulliance/nullbin-server` (libsodium `crypto_secretstream_xchacha20poly1305`, BLAKE2b-256 KDF, Argon2id `OPSLIMIT_MODERATE`/`MEMLIMIT_MODERATE` with Unicode NFC normalization, blob v2 with Padmé padding, legacy blob v1 read-only support, deterministic stored ZIP archives, burn-after-reading, and separate recipient links).
-- **Decentralized & fail-closed:** No default public server is hardcoded. You must explicitly choose a target instance via `--server`, `NULLBIN_SERVER`, or `~/.config/nullbin/config.json` (mode `0600`).
-- **Hardened CLI:**
-  - Never accepts plaintext passwords in CLI arguments (`argv`); passwords come only from interactive TTY prompts (echo off), `--password-stdin`, `--password-fd`, or `--generate-password`.
-  - Supports `--url-stdin` so `#key` and `#d.<delete-token>` fragments do not appear in process listings or shell history.
-  - Strictly enforces HTTPS (plain HTTP allowed only for `localhost`, `127.0.0.1`, `[::1]`), disables all HTTP redirects, sends no cookies or `Referer`, and bounds all JSON/prefix/error reads.
-  - Verifies `TAG_FINAL`, zero-padding, and EOF before atomically committing decrypted attachments from a private `0600` temporary file.
-  - Escapes ANSI/C0/C1 terminal control sequences and warns on hidden/bidirectional (Trojan Source) characters when printing to an interactive TTY.
-- **Minimal dependencies:** Go standard library + `golang.org/x/crypto`, `golang.org/x/term`, and `golang.org/x/text` only.
+## Start here
 
-## Installation
+| I want to… | Go to |
+|---|---|
+| Install `nullbin-cli` | [Install](#install) |
+| Point it at my Nullbin server | [Choose a server](#choose-a-server) |
+| Create, read, or delete pastes | [Using nullbin-cli](#using-nullbin-cli) |
+| Embed Nullbin in a Go app | [Go library](#go-library) |
+| Review CLI security guarantees | [CLI safety](#cli-safety) and [THREAT_MODEL.md](THREAT_MODEL.md) |
+| Look up every command flag | [Flag reference](#flag-reference) |
+| Report a security problem | [SECURITY.md](SECURITY.md) |
+| Contribute or cut a release | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| See the license | [AGPL-3.0-only](LICENSE) |
 
-### Build from source (recommended)
+## Install
+
+**Build from source** (Go 1.25+):
 
 ```bash
 git clone https://github.com/Nulliance/nullbin-cli.git
@@ -28,15 +30,16 @@ cd nullbin-cli
 CGO_ENABLED=0 go build -trimpath -o nullbin-cli ./cmd/nullbin-cli
 ```
 
-Or with Go 1.25+:
+Or install directly with Go:
 
 ```bash
 go install github.com/Nulliance/nullbin-cli/cmd/nullbin-cli@latest
 ```
 
-### Verify a release binary
+<details>
+<summary>Verify a published release binary</summary>
 
-Official releases include `SHA256SUMS` and a keyless Sigstore Cosign bundle (`SHA256SUMS.sigstore.json`):
+Download your platform binary, `SHA256SUMS`, and `SHA256SUMS.sigstore.json` from the [Releases page](https://github.com/Nulliance/nullbin-cli/releases), then verify:
 
 ```bash
 cosign verify-blob \
@@ -47,85 +50,65 @@ cosign verify-blob \
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-## Server Configuration
+</details>
 
-`nullbin-cli` never defaults to any public server. Configure your target instance using one of:
+## Choose a server
 
-1. Flag: `--server https://paste.example.com` (optional `--api https://api.example.com` for split deployments; if omitted, `api_origin` is discovered via `GET <server>/version.json`).
-2. Environment: `export NULLBIN_SERVER=https://paste.example.com` (optional `NULLBIN_API`).
-3. Config file: `~/.config/nullbin/config.json` (on POSIX systems, permissions must be `0600`):
+`nullbin-cli` has **no default public server**. For `create`, specify your instance in one of three ways (checked in order):
 
-```json
-{
-  "server": "https://paste.example.com"
-}
-```
+1. Flag: `--server https://paste.example.com`
+2. Environment variable: `export NULLBIN_SERVER=https://paste.example.com`
+3. Config file at `~/.config/nullbin/config.json` (must be mode `0600` on Linux/macOS):
 
-For `read`, `delete`, and `recipients`, the server origin is inferred automatically from the paste or delete URL unless overridden with `--server`.
+   ```json
+   {
+     "server": "https://paste.example.com"
+   }
+   ```
 
-## CLI Usage
+**Separate website and API hosts (Option B):** `nullbin-cli` discovers the API automatically from `<server>/version.json`, or you can pin it with `--api https://api.example.com` (or `NULLBIN_API` / `"api"` in `config.json`).
 
-### Create a paste
+**Reading, deleting, and managing links:** `read`, `delete`, and `recipients` read the server address directly from the paste or delete URL.
 
-```bash
-# From stdin
-echo "top secret" | nullbin-cli create --server https://paste.example.com --expires 1h
+HTTPS is required. Plain `http://` is allowed only for `localhost`, `127.0.0.1`, and `[::1]`.
 
-# With interactive password prompt (echo off, never in argv) and burn after reading
-nullbin-cli create --server https://paste.example.com --text "one-time secret" --burn --password
+## Using nullbin-cli
 
-# With a locally generated 20-character password and JSON output for scripts
-nullbin-cli create --server https://paste.example.com --file report.pdf --generate-password --json
+| Task | Command |
+|---|---|
+| Create from stdin | `echo "secret" \| nullbin-cli create --expires 1h` |
+| Create with a password (prompt) | `nullbin-cli create --text "secret" --password` |
+| Create with a generated password | `nullbin-cli create --text "secret" --generate-password` |
+| Create a burn-after-reading paste | `nullbin-cli create --text "one-time" --burn` |
+| Attach one or more files | `nullbin-cli create --file report.pdf --file notes.txt` |
+| Create separate links per person | `nullbin-cli create --text "creds" --recipient-limits 1,3,none` |
+| Read a paste (keeping `#key` out of `argv`) | `printf '%s\n' '<view-url>' \| nullbin-cli read --url-stdin` |
+| Read a burn paste and save attachment | `nullbin-cli read --yes --out-dir ./downloads '<view-url>'` |
+| Delete a paste | `printf '%s\n' '<delete-url>' \| nullbin-cli delete --url-stdin` |
+| List or revoke separate links | `printf '%s\n' '<delete-url>' \| nullbin-cli recipients list --url-stdin` |
+| Check CLI and server versions | `nullbin-cli version --server https://paste.example.com` |
 
-# Attach multiple files (2..100 files packed into a deterministic stored ZIP)
-nullbin-cli create --server https://paste.example.com --file a.txt --file b.bin --expires 7d
+Add `--json` to any command for machine-readable output on stdout (prompts and notices go to stderr).
 
-# Create separate per-recipient links with per-link open limits
-nullbin-cli create --server https://paste.example.com --text "team credentials" --recipient-limits 1,3,none
-```
+### Passing passwords and URLs safely
 
-### Read a paste
+`--password` never takes a value on the command line (so passwords never leak in `ps` or shell history):
 
-```bash
-# Read from URL passed on stdin (keeps #key out of argv / ps / shell history)
-printf '%s\n' 'https://paste.example.com/p/<id>#<key>' | nullbin-cli read --url-stdin
+- Interactive terminal: `--password` (prompts with echo off).
+- Scripts / pipes: `--password-stdin` or `--password-fd 3` (`3< /path/to/passfile`).
+- Keep `#key` and `#d.<token>` out of process listings with `--url-stdin`.
 
-# Read a burn paste non-interactively and save attachment safely into ./downloads
-nullbin-cli read --yes --out-dir ./downloads 'https://paste.example.com/p/<id>#<key>.b'
+## CLI safety
 
-# Read a password-protected paste from a file descriptor
-nullbin-cli read --password-fd 3 'https://paste.example.com/p/<id>#<key>' 3< /path/to/passfile
+- **No remote JS trust:** All crypto runs in your local binary.
+- **Verify before saving:** Attachments decrypt into a private (`0600`) temporary file and are renamed into place only after full stream authentication and zero-padding checks pass. Untrusted filenames are sanitized, and existing files are never overwritten without `--force`.
+- **Safe terminal output:** On an interactive TTY, ANSI/control/bidi sequences are escaped and hidden characters (Trojan Source) trigger a warning on stderr. Pass `--raw` (or pipe stdout) for unmodified bytes.
+- **No accidental burns:** Opening a burn paste or limited recipient link prompts on a TTY and refuses non-interactively unless `--yes` is given.
+- **Strict transport:** HTTPS-only (except loopback), no HTTP redirects, no cookies or `Referer`, and bounded reads.
 
-# Raw unmodified bytes (disables TTY ANSI/bidi escaping)
-nullbin-cli read --raw 'https://paste.example.com/p/<id>#<key>'
-```
+For the full analysis, see [THREAT_MODEL.md](THREAT_MODEL.md).
 
-### Delete a paste
-
-```bash
-printf '%s\n' 'https://paste.example.com/d/<id>#d.<token>' | nullbin-cli delete --url-stdin
-```
-
-### Manage separate recipient links
-
-```bash
-# List open counts and revocation status
-printf '%s\n' 'https://paste.example.com/d/<id>#d.<token>.r' | nullbin-cli recipients list --url-stdin
-
-# Revoke recipient index 1 (0-based)
-printf '%s\n' 'https://paste.example.com/d/<id>#d.<token>.r' | nullbin-cli recipients revoke --url-stdin 1
-```
-
-### Version
-
-```bash
-nullbin-cli version
-nullbin-cli version --server https://paste.example.com
-```
-
-## Go Library Usage
-
-Embed Nullbin directly in Go applications via `github.com/Nulliance/nullbin-cli/client` and `github.com/Nulliance/nullbin-cli/link`:
+## Go library
 
 ```go
 package main
@@ -153,7 +136,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Share:", created.ViewURL)
 
 	vl, err := link.ParseViewURL(created.ViewURL)
 	if err != nil {
@@ -166,10 +148,53 @@ func main() {
 		log.Fatal(err)
 	}
 	defer opened.Close()
-	fmt.Println("Decrypted:", opened.Meta.Text)
+	fmt.Println(opened.Meta.Text)
 }
 ```
 
-## License
+## Flag reference
 
-Licensed under **AGPL-3.0-only** (matching `Nulliance/nullbin-server`). See [LICENSE](LICENSE).
+<details>
+<summary>All commands and flags</summary>
+
+### `create`
+
+| Flag | Description |
+|---|---|
+| `--text <string>` | Paste text (otherwise reads stdin) |
+| `--file <path>` | Attach a file (repeatable, up to 100 files) |
+| `--expires <dur>` | `5m`, `30m`, `1h`, `3h`, `12h`, `1d` (default), `3d`, `7d`, `30d` |
+| `--burn` | Burn after reading |
+| `--max-reads <N>` | Open limit (`1`–`1000`) for `--burn` or `--recipients` |
+| `--recipients <N>` | Create `N` separate links (`2`–`20`) |
+| `--recipient-limits <csv>` | Per-link open limits (e.g. `1,3,none`) |
+| `--discussion` | Enable encrypted comments (not with `--burn` or recipients) |
+| `--password` | Prompt interactively on TTY (echo off) |
+| `--password-stdin` | Read password from first line of stdin |
+| `--password-fd <N>` | Read password from open file descriptor `N` |
+| `--generate-password` | Generate a 20-character random password locally |
+| `--server <origin>` | Target Nullbin server origin |
+| `--api <origin>` | Explicit API origin (overrides `/version.json`) |
+| `--json` | JSON output |
+
+### `read [url]`
+
+| Flag | Description |
+|---|---|
+| `--url-stdin` | Read paste URL from stdin |
+| `--out <path>` | Write attachment to this exact path |
+| `--out-dir <dir>` | Write attachment into directory using sanitized filename |
+| `--force` | Overwrite existing regular output file |
+| `--raw` | Print raw bytes without TTY escaping |
+| `--yes` | Confirm consuming a burn/limited link without prompting |
+| `--password`, `--password-stdin`, `--password-fd <N>` | Password input |
+| `--server <origin>`, `--api <origin>`, `--json` | Origin overrides and JSON output |
+
+### `delete [delete-url]` and `recipients`
+
+- `delete [--url-stdin] [--server <origin>] [--api <origin>] [--json] [delete-url]`
+- `recipients list [--url-stdin] [--server <origin>] [--api <origin>] [--json] [delete-url]`
+- `recipients revoke [--url-stdin] [--server <origin>] [--api <origin>] [--json] [delete-url] <index>` (0-based index)
+- `version [--server <origin>] [--api <origin>] [--json]`
+
+</details>

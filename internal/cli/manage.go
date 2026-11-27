@@ -63,7 +63,7 @@ func (a *App) runDelete(ctx context.Context, args []string) error {
 
 func (a *App) runRecipients(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nullbin-cli recipients <list|revoke> [flags] ...")
+		return errors.New("usage: nullbin-cli recipients <list|revoke> [flags]")
 	}
 	switch args[0] {
 	case "list":

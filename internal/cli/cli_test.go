@@ -264,7 +264,7 @@ func TestCLICreateReadDeleteAndSecurityGuards(t *testing.T) {
 
 	// 4. Read using --password-stdin and save attachment into --out-dir.
 	outDir := t.TempDir()
-	code, out, errOut = runCLI(t, hc, created.GeneratedPassword+"\n", "read", "--password-stdin", "--out-dir", outDir, "--json", created.ViewURL)
+	code, _, errOut = runCLI(t, hc, created.GeneratedPassword+"\n", "read", "--password-stdin", "--out-dir", outDir, "--json", created.ViewURL)
 	if code != 0 {
 		t.Fatalf("read failed (%d): %s", code, errOut)
 	}
