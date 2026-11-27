@@ -22,24 +22,11 @@ For hosting a server, protocol specifications, and paste limits, see [`Nulliance
 
 ## Install
 
-**Build from source** (Go 1.25+):
+Always install a **published release** (`main` is the development branch).
 
-```bash
-git clone https://github.com/Nulliance/nullbin-cli.git
-cd nullbin-cli
-CGO_ENABLED=0 go build -trimpath -o nullbin-cli ./cmd/nullbin-cli
-```
+### 1. Download a verified release binary (recommended)
 
-Or install directly with Go:
-
-```bash
-go install github.com/Nulliance/nullbin-cli/cmd/nullbin-cli@latest
-```
-
-<details>
-<summary>Verify a published release binary</summary>
-
-Download your platform binary, `SHA256SUMS`, and `SHA256SUMS.sigstore.json` from the [Releases page](https://github.com/Nulliance/nullbin-cli/releases), then verify:
+Download your platform binary (`linux`, `darwin`, or `windows`; `amd64` or `arm64`), `SHA256SUMS`, and `SHA256SUMS.sigstore.json` from the [Releases page](https://github.com/Nulliance/nullbin-cli/releases), then verify before running:
 
 ```bash
 cosign verify-blob \
@@ -48,6 +35,26 @@ cosign verify-blob \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
+```
+
+### 2. Install with Go
+
+Installs the latest published release from source (Go 1.25+):
+
+```bash
+go install github.com/Nulliance/nullbin-cli/cmd/nullbin-cli@latest
+```
+
+<details>
+<summary>Build a release tag from source manually</summary>
+
+Replace `v0.1.0` with the latest tag on the [Releases page](https://github.com/Nulliance/nullbin-cli/releases):
+
+```bash
+git clone https://github.com/Nulliance/nullbin-cli.git
+cd nullbin-cli
+git checkout --detach refs/tags/v0.1.0
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=v0.1.0" -o nullbin-cli ./cmd/nullbin-cli
 ```
 
 </details>
