@@ -225,9 +225,15 @@ func ParseDeleteFragment(fragment string) (token string, hasRecipients bool, err
 }
 
 // ParseViewURL parses and strictly validates a Nullbin paste view URL.
+// If no scheme is present (e.g. "paste.example.com/p/<id>#<key>"), "https://"
+// is assumed automatically; explicit "http://" is rejected for non-loopback hosts.
 func ParseViewURL(rawURL string) (*ViewLink, error) {
 	rawURL = strings.TrimSpace(rawURL)
-	u, err := url.Parse(rawURL)
+	normalized, err := normalizeImplicitHTTPS(rawURL)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	u, err := url.Parse(normalized)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" {
 		return nil, ErrInvalidURL
 	}
@@ -256,9 +262,15 @@ func ParseViewURL(rawURL string) (*ViewLink, error) {
 }
 
 // ParseDeleteURL parses and strictly validates a Nullbin delete URL.
+// If no scheme is present (e.g. "paste.example.com/d/<id>#d.<token>"),
+// "https://" is assumed automatically; explicit "http://" is rejected for non-loopback hosts.
 func ParseDeleteURL(rawURL string) (*DeleteLink, error) {
 	rawURL = strings.TrimSpace(rawURL)
-	u, err := url.Parse(rawURL)
+	normalized, err := normalizeImplicitHTTPS(rawURL)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	u, err := url.Parse(normalized)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" {
 		return nil, ErrInvalidURL
 	}

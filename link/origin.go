@@ -27,19 +27,22 @@ func IsLoopbackHost(host string) bool {
 }
 
 // ValidateOrigin validates and canonicalizes a server origin for user inputs
-// (such as --server, --api, NULLBIN_SERVER, or config.json). A single trailing
-// slash is tolerated on user input and stripped; any non-root path, query,
-// fragment, or userinfo is rejected. HTTPS is required except for loopback.
+// (such as --server, --api, NULLBIN_SERVER, or config.json).
+//
+// If no scheme is given (for example "paste.example.com"), "https://" is
+// assumed automatically. Explicit "http://" is rejected for all non-loopback
+// hosts. A single trailing slash is tolerated and stripped; any non-root path,
+// query, fragment, or userinfo is rejected.
 func ValidateOrigin(raw string) (string, error) {
-	return validateOrigin(raw, true)
+	return validateOrigin(raw, true, true)
 }
 
 // ValidateCanonicalOrigin strictly validates an origin from an untrusted
-// discovery document (such as version.json's api_origin): no trailing slash,
-// no path, no query, no fragment, no userinfo, and HTTPS-only (loopback HTTP
-// allowed only when allowLoopbackHTTP is true).
+// discovery document (such as version.json's api_origin): explicit scheme, no
+// trailing slash, no path, no query, no fragment, no userinfo, and HTTPS-only
+// (loopback HTTP allowed only when allowLoopbackHTTP is true).
 func ValidateCanonicalOrigin(raw string, allowLoopbackHTTP bool) (string, error) {
-	origin, err := validateOrigin(raw, false)
+	origin, err := validateOrigin(raw, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -53,7 +56,18 @@ func ValidateCanonicalOrigin(raw string, allowLoopbackHTTP bool) (string, error)
 	return origin, nil
 }
 
-func validateOrigin(raw string, allowTrailingSlash bool) (string, error) {
+func normalizeImplicitHTTPS(raw string) (string, error) {
+	if strings.Contains(raw, "://") {
+		return raw, nil
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(raw, "//") || strings.HasPrefix(lower, "http:") || strings.HasPrefix(lower, "https:") {
+		return "", ErrInvalidOrigin
+	}
+	return "https://" + raw, nil
+}
+
+func validateOrigin(raw string, allowTrailingSlash, allowImplicitHTTPS bool) (string, error) {
 	if raw == "" || strings.TrimSpace(raw) != raw {
 		return "", ErrInvalidOrigin
 	}
@@ -63,7 +77,16 @@ func validateOrigin(raw string, allowTrailingSlash bool) (string, error) {
 		}
 	}
 
-	u, err := url.Parse(raw)
+	input := raw
+	if allowImplicitHTTPS {
+		var err error
+		input, err = normalizeImplicitHTTPS(raw)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	u, err := url.Parse(input)
 	if err != nil {
 		return "", ErrInvalidOrigin
 	}

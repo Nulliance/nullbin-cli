@@ -9,6 +9,9 @@ import (
 
 func TestValidateOrigin(t *testing.T) {
 	good := map[string]string{
+		"paste.example.com":              "https://paste.example.com",
+		"PASTE.EXAMPLE.COM:443/":         "https://paste.example.com",
+		"paste.example.com:8443":         "https://paste.example.com:8443",
 		"https://paste.example.com":      "https://paste.example.com",
 		"https://PASTE.EXAMPLE.COM:443/": "https://paste.example.com",
 		"https://paste.example.com:8443": "https://paste.example.com:8443",
@@ -30,8 +33,16 @@ func TestValidateOrigin(t *testing.T) {
 	bad := []string{
 		"",
 		"http://paste.example.com",
+		"http:paste.example.com",
+		"https:paste.example.com",
+		"//paste.example.com",
 		"http://192.168.1.1:8080",
 		"ftp://paste.example.com",
+		"mailto:user@paste.example.com",
+		"user:pass@paste.example.com",
+		"paste.example.com/subpath",
+		"paste.example.com?a=1",
+		"paste.example.com#frag",
 		"https://user:pass@paste.example.com",
 		"https://paste.example.com/subpath",
 		"https://paste.example.com?a=1",
@@ -45,7 +56,10 @@ func TestValidateOrigin(t *testing.T) {
 		}
 	}
 
-	// ValidateCanonicalOrigin rejects trailing slash & HTTP when allowLoopbackHTTP=false.
+	// ValidateCanonicalOrigin requires explicit scheme and rejects trailing slash & HTTP when allowLoopbackHTTP=false.
+	if _, err := ValidateCanonicalOrigin("api.example.com", false); err == nil {
+		t.Fatal("expected canonical origin to reject missing scheme")
+	}
 	if _, err := ValidateCanonicalOrigin("https://api.example.com/", false); err == nil {
 		t.Fatal("expected canonical origin to reject trailing slash")
 	}
@@ -93,6 +107,27 @@ func TestViewAndDeleteLinkRoundTrip(t *testing.T) {
 	}
 	if dl.Origin != "https://paste.example.com" || dl.ID != id || dl.DeleteToken != delTok || !dl.HasRecipients {
 		t.Fatalf("unexpected DeleteLink: %+v", dl)
+	}
+
+	// Schemeless view and delete URLs default to HTTPS; explicit http:// is still rejected.
+	vlNoScheme, err := ParseViewURL(strings.TrimPrefix(u, "https://"))
+	if err != nil {
+		t.Fatalf("ParseViewURL without scheme: %v", err)
+	}
+	defer vlNoScheme.Close()
+	if vlNoScheme.Origin != "https://paste.example.com" || vlNoScheme.ID != id {
+		t.Fatalf("unexpected schemeless ViewLink: %+v", vlNoScheme)
+	}
+	if _, err := ParseViewURL("http://" + strings.TrimPrefix(u, "https://")); err == nil {
+		t.Fatal("expected explicit http:// view URL to be rejected")
+	}
+
+	dlNoScheme, err := ParseDeleteURL(strings.TrimPrefix(du, "https://"))
+	if err != nil || dlNoScheme.Origin != "https://paste.example.com" || dlNoScheme.DeleteToken != delTok {
+		t.Fatalf("ParseDeleteURL without scheme: %+v, %v", dlNoScheme, err)
+	}
+	if _, err := ParseDeleteURL("http://" + strings.TrimPrefix(du, "https://")); err == nil {
+		t.Fatal("expected explicit http:// delete URL to be rejected")
 	}
 
 	// View fragment edited to /d/ must be rejected (no "d." prefix).

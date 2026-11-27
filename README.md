@@ -56,21 +56,21 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 `nullbin-cli` has **no default public server**. For `create`, specify your instance in one of three ways (checked in order):
 
-1. Flag: `--server https://paste.example.com`
-2. Environment variable: `export NULLBIN_SERVER=https://paste.example.com`
+1. Flag: `--server paste.example.com`
+2. Environment variable: `export NULLBIN_SERVER=paste.example.com`
 3. Config file at `~/.config/nullbin/config.json` (must be mode `0600` on Linux/macOS):
 
    ```json
    {
-     "server": "https://paste.example.com"
+     "server": "paste.example.com"
    }
    ```
 
-**Separate website and API hosts (Option B):** `nullbin-cli` discovers the API automatically from `<server>/version.json`, or you can pin it with `--api https://api.example.com` (or `NULLBIN_API` / `"api"` in `config.json`).
+**HTTPS is automatic and required.** You do not need to write `https://` — bare hosts like `paste.example.com` always connect over HTTPS and fail closed if the server does not serve valid HTTPS. Explicit `http://` is rejected everywhere except `localhost`, `127.0.0.1`, and `[::1]`.
+
+**Separate website and API hosts (Option B):** `nullbin-cli` discovers the API automatically from `<server>/version.json`, or you can pin it with `--api api.example.com` (or `NULLBIN_API` / `"api"` in `config.json`).
 
 **Reading, deleting, and managing links:** `read`, `delete`, and `recipients` read the server address directly from the paste or delete URL.
-
-HTTPS is required. Plain `http://` is allowed only for `localhost`, `127.0.0.1`, and `[::1]`.
 
 ## Using nullbin-cli
 
@@ -86,7 +86,7 @@ HTTPS is required. Plain `http://` is allowed only for `localhost`, `127.0.0.1`,
 | Read a burn paste and save attachment | `nullbin-cli read --yes --out-dir ./downloads '<view-url>'` |
 | Delete a paste | `printf '%s\n' '<delete-url>' \| nullbin-cli delete --url-stdin` |
 | List or revoke separate links | `printf '%s\n' '<delete-url>' \| nullbin-cli recipients list --url-stdin` |
-| Check CLI and server versions | `nullbin-cli version --server https://paste.example.com` |
+| Check CLI and server versions | `nullbin-cli version --server paste.example.com` |
 
 Add `--json` to any command for machine-readable output on stdout (prompts and notices go to stderr).
 
@@ -124,7 +124,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	c, err := client.New("https://paste.example.com")
+	c, err := client.New("paste.example.com")
 	if err != nil {
 		log.Fatal(err)
 	}

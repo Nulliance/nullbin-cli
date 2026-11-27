@@ -51,7 +51,7 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 	fs.BoolVar(&passwordStdin, "password-stdin", false, "Read password from the first line of stdin")
 	fs.IntVar(&passwordFD, "password-fd", -1, "Read password from open file descriptor N")
 	fs.BoolVar(&generatePassword, "generate-password", false, "Generate a strong 20-character password locally")
-	fs.StringVar(&serverFlag, "server", "", "Target Nullbin server origin (https://... or loopback http://...)")
+	fs.StringVar(&serverFlag, "server", "", "Target Nullbin server host or origin (https:// assumed; loopback http:// allowed)")
 	fs.StringVar(&apiFlag, "api", "", "Explicit API origin for split deployments (overrides /version.json discovery)")
 	fs.BoolVar(&jsonOut, "json", false, "Output machine-readable JSON")
 
