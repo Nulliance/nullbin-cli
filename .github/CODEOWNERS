@@ -1,0 +1,9 @@
+# Security-critical paths require maintainer review.
+/go.mod @Nulliance/maintainers
+/go.sum @Nulliance/maintainers
+/crypto/ @Nulliance/maintainers
+/format/ @Nulliance/maintainers
+/link/ @Nulliance/maintainers
+/client/ @Nulliance/maintainers
+/internal/ @Nulliance/maintainers
+/.github/ @Nulliance/maintainers

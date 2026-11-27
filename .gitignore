@@ -1,0 +1,21 @@
+# Build artifacts
+/nullbin-cli
+/nullbin-cli.exe
+/dist/
+/out/
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Local config or scratch
+config.json
+.env
