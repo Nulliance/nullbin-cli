@@ -214,6 +214,21 @@ func TestV1ReadOnlySupport(t *testing.T) {
 	if opened.Meta.Text != "legacy v1 text" || opened.Prefix.Version != 1 {
 		t.Fatalf("unexpected v1 result: %+v", opened)
 	}
+
+	// Future blob version (> 2) and unknown flags should suggest updating nullbin-cli.
+	futurePrefix := make([]byte, PrefixBytes)
+	copy(futurePrefix[0:4], Magic[:])
+	futurePrefix[4] = 3
+	if _, err := ParsePrefix(futurePrefix); err == nil || !strings.Contains(err.Error(), "update") {
+		t.Fatalf("expected update hint for v3 prefix, got %v", err)
+	}
+	unknownFlagPrefix := make([]byte, PrefixBytes)
+	copy(unknownFlagPrefix[0:4], Magic[:])
+	unknownFlagPrefix[4] = Version
+	unknownFlagPrefix[5] = 0x02
+	if _, err := ParsePrefix(unknownFlagPrefix); err == nil || !strings.Contains(err.Error(), "update") {
+		t.Fatalf("expected update hint for unknown flag bit, got %v", err)
+	}
 }
 
 func TestStoredZipDeterministicAndCleanNames(t *testing.T) {

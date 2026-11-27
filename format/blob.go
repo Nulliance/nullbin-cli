@@ -82,11 +82,14 @@ func ParsePrefix(p []byte) (Prefix, error) {
 	}
 	version := p[4]
 	if version != Version && version != VersionUnpadded {
+		if version > Version {
+			return out, newErr(CodeFormat, fmt.Sprintf("unsupported paste format version %d (this paste requires a newer version of nullbin-cli; please update)", version))
+		}
 		return out, newErr(CodeFormat, "unsupported paste format version")
 	}
 	flags := p[5]
 	if (flags &^ KnownFlags) != 0 {
-		return out, newErr(CodeFormat, "paste uses unknown header flags")
+		return out, newErr(CodeFormat, "paste uses unknown header options (this paste may require a newer version of nullbin-cli; please update)")
 	}
 	password := (flags & FlagPassword) != 0
 	if !password {

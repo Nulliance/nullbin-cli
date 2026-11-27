@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/Nulliance/nullbin-cli/client"
+	"github.com/Nulliance/nullbin-cli/format"
 	"github.com/Nulliance/nullbin-cli/internal/tty"
 	"github.com/Nulliance/nullbin-cli/link"
 )
@@ -230,13 +232,21 @@ func (a *App) runVersion(ctx context.Context, args []string) error {
 		return errors.New("unexpected positional arguments")
 	}
 
+	protocolInfo := map[string]any{
+		"api":        client.APIVersion,
+		"blob_write": int(format.Version),
+		"blob_read":  []int{int(format.VersionUnpadded), int(format.Version)},
+	}
+
 	if serverFlag == "" {
 		if jsonOut {
 			return a.writeJSON(map[string]any{
 				"cli_version": a.Build.Version,
+				"protocol":    protocolInfo,
 			})
 		}
 		fmt.Fprintf(a.Stdout, "nullbin-cli %s\n", a.Build.Version)
+		fmt.Fprintf(a.Stdout, "Protocol:    API %s, blob v%d (v%d read-only)\n", client.APIVersion, format.Version, format.VersionUnpadded)
 		return nil
 	}
 
@@ -264,10 +274,12 @@ func (a *App) runVersion(ctx context.Context, args []string) error {
 	if jsonOut {
 		return a.writeJSON(map[string]any{
 			"cli_version": a.Build.Version,
+			"protocol":    protocolInfo,
 			"server":      info,
 		})
 	}
 	fmt.Fprintf(a.Stdout, "nullbin-cli %s\n", a.Build.Version)
+	fmt.Fprintf(a.Stdout, "Protocol:    API %s, blob v%d (v%d read-only)\n", client.APIVersion, format.Version, format.VersionUnpadded)
 	fmt.Fprintf(a.Stdout, "Server:      %s (API: %s)\n", info.SiteOrigin, info.APIOrigin)
 	if info.SiteVersion != "" {
 		fmt.Fprintf(a.Stdout, "Site:        %s\n", info.SiteVersion)

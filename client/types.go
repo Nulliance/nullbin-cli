@@ -12,6 +12,9 @@ import (
 )
 
 const (
+	// APIVersion is the Nullbin HTTP API version spoken by this client.
+	APIVersion = "v1"
+
 	// UploadChunkSize is the sequential chunk size uploaded to /chunks/{n} (4 MiB).
 	UploadChunkSize = 4 * 1024 * 1024
 	// MaxBurnReads is the maximum allowed opens per burn paste or recipient link.
@@ -112,6 +115,11 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	// Give a clear hint when an older nullbin-server rejects a newer feature
+	// (such as 30-day expiry, which was added after the 7-day ceiling).
+	if e.Message == "expires_in must be one of 300, 1800, 3600, 10800, 43200, 86400, 259200, 604800" {
+		return fmt.Sprintf("server error (%d): %s (this server may be running an older version of nullbin-server)", e.Status, e.Message)
+	}
 	return fmt.Sprintf("server error (%d): %s", e.Status, e.Message)
 }
 

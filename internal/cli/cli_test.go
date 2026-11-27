@@ -297,9 +297,9 @@ func TestCLICreateReadDeleteAndSecurityGuards(t *testing.T) {
 		t.Fatalf("burn read --yes failed: code=%d out=%q err=%q", code, out, errOut)
 	}
 
-	// 7. Version command with --server.
+	// 7. Version command with --server reports protocol info and server version.
 	code, out, errOut = runCLI(t, hc, "", "version", "--server", srvURL, "--json")
-	if code != 0 || !strings.Contains(out, "v1.0.0-test") {
+	if code != 0 || !strings.Contains(out, "v1.0.0-test") || !strings.Contains(out, `"api": "v1"`) {
 		t.Fatalf("version failed: code=%d out=%q err=%q", code, out, errOut)
 	}
 }
