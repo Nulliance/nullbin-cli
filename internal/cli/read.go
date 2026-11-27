@@ -50,11 +50,20 @@ func (a *App) runRead(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	passwordFDSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "password-fd" {
+			passwordFDSet = true
+		}
+	})
+	if passwordFDSet && passwordFD < 0 {
+		return errors.New("--password-fd must be a non-negative file descriptor")
+	}
 	if outPath != "" && outDir != "" {
 		return errors.New("specify at most one of --out or --out-dir")
 	}
-	if urlStdin && passwordStdin {
-		return errors.New("cannot use both --url-stdin and --password-stdin (use --password-fd or interactive TTY)")
+	if urlStdin && (passwordStdin || (passwordFDSet && passwordFD == 0)) {
+		return errors.New("cannot read both URL and password from stdin (use --password-fd with fd >= 3 or interactive TTY)")
 	}
 
 	pwSources := 0
@@ -64,7 +73,7 @@ func (a *App) runRead(ctx context.Context, args []string) error {
 	if passwordStdin {
 		pwSources++
 	}
-	if passwordFD >= 0 {
+	if passwordFDSet {
 		pwSources++
 	}
 	if pwSources > 1 {

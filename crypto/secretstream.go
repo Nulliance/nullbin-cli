@@ -100,7 +100,7 @@ func (st *SecretStream) Close() {
 // Rekey explicitly ratchets the secretstream key and INONCE, matching
 // libsodium's crypto_secretstream_xchacha20poly1305_rekey.
 func (st *SecretStream) Rekey() error {
-	if st.finalized {
+	if st == nil || st.finalized {
 		return ErrStreamFinalized
 	}
 	return st.rekey()
@@ -145,7 +145,7 @@ func (st *SecretStream) advanceState(mac *[16]byte, tag byte) error {
 // Push encrypts and authenticates a single frame with optional additional data
 // ad and libsodium tag (TagMessage, TagPush, TagRekey, TagFinal).
 func (st *SecretStream) Push(m, ad []byte, tag byte) ([]byte, error) {
-	if st.finalized {
+	if st == nil || st.finalized {
 		return nil, ErrStreamFinalized
 	}
 	if uint64(len(m)) > MaxSecretStreamMessageBytes {
@@ -207,8 +207,10 @@ func (st *SecretStream) Push(m, ad []byte, tag byte) ([]byte, error) {
 
 	if err := st.advanceState(&mac, tag); err != nil {
 		clear(out)
+		clear(mac[:])
 		return nil, err
 	}
+	clear(mac[:])
 	return out, nil
 }
 
@@ -216,7 +218,7 @@ func (st *SecretStream) Push(m, ad []byte, tag byte) ([]byte, error) {
 // The Poly1305 MAC is verified in constant time before decrypting any payload
 // bytes so unauthenticated plaintext is never released.
 func (st *SecretStream) Pull(ct, ad []byte) ([]byte, byte, error) {
-	if st.finalized {
+	if st == nil || st.finalized {
 		return nil, 0, ErrStreamFinalized
 	}
 	if len(ct) < SecretStreamABytes {

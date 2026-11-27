@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/Nulliance/nullbin-cli/link"
@@ -90,7 +91,7 @@ func (c *Client) ListRecipients(ctx context.Context, dl *link.DeleteLink) ([]Rec
 			return nil, errors.New("server sent invalid recipient opens")
 		}
 		opens, err := opensNum.Int64()
-		if err != nil || opens < 0 {
+		if err != nil || opens < 0 || opens > math.MaxInt32 {
 			return nil, errors.New("server sent invalid recipient opens")
 		}
 

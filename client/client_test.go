@@ -549,3 +549,118 @@ func TestClientRejectsSwappedBurnPrefix(t *testing.T) {
 		t.Fatalf("expected CodeTampered on prefix swap, got %v", err)
 	}
 }
+
+func TestClientSwappedPrefixBlocksPasswordPromptAndReadErrorsStopUpload(t *testing.T) {
+	// 1. Swapped prefix (un-passworded /prefix, passworded /read) must fail before prompting.
+	ms := newMockServer()
+	baseURL := "https://paste.example.test"
+	baseHandler := ms.handler()
+
+	c, err := New(baseURL, WithHTTPClient(&http.Client{Transport: handlerTransport{h: baseHandler}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := c.Create(context.Background(), CreateOptions{
+		Text:      "burn without password",
+		ExpiresIn: 300,
+		Burn:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pwBlobPrefix, err := format.BuildPrefix(true, bytes.Repeat([]byte{0xAB}, format.SaltBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	swappedRead := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/read") {
+			// Return a fake blob whose prefix claims FlagPassword=1.
+			var body bytes.Buffer
+			body.Write(pwBlobPrefix)
+			body.Write(make([]byte, format.StreamHeaderBytes))
+			body.Write([]byte{0, 0, 0, 17})
+			body.Write(make([]byte, 17))
+			w.Header().Set("Nullbin-Reads-Remaining", "0")
+			_, _ = w.Write(body.Bytes())
+			return
+		}
+		baseHandler.ServeHTTP(w, r)
+	})
+	vl, err := link.ParseViewURL(created.ViewURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vl.Close()
+
+	promptCalled := false
+	cSwapped, err := New(baseURL, WithHTTPClient(&http.Client{Transport: handlerTransport{h: swappedRead}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cSwapped.Read(context.Background(), vl, ReadOptions{
+		PasswordPrompt: func(int) ([]byte, error) {
+			promptCalled = true
+			return []byte("should-never-be-called"), nil
+		},
+	})
+	var pe *format.PasteError
+	if !errors.As(err, &pe) || pe.Code != format.CodeTampered {
+		t.Fatalf("expected CodeTampered on password-flag prefix swap, got %v", err)
+	}
+	if promptCalled {
+		t.Fatal("PasswordPrompt was invoked despite peeked prefix having password=false")
+	}
+
+	// 2. Mid-read file error must abort before uploading the partial chunk.
+	chunksPut := 0
+	countHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/chunks/") {
+			chunksPut++
+		}
+		baseHandler.ServeHTTP(w, r)
+	})
+	cCount, err := New(baseURL, WithHTTPClient(&http.Client{Transport: handlerTransport{h: countHandler}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cCount.Create(context.Background(), CreateOptions{
+		ExpiresIn: 300,
+		Files: []FileInput{{
+			Name: "failing.bin",
+			Size: 1024,
+			Open: func() (io.ReadCloser, error) {
+				return io.NopCloser(&errAfterReader{data: []byte("partial"), err: errors.New("disk read failed")}), nil
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "disk read failed") {
+		t.Fatalf("expected disk read error, got %v", err)
+	}
+	if chunksPut != 0 {
+		t.Fatalf("uploaded %d chunks despite encReader failing on chunk 0", chunksPut)
+	}
+
+	// 3. Older-server expiry rejection includes a clear compatibility hint.
+	apiErr := &APIError{
+		Status:  http.StatusBadRequest,
+		Message: "expires_in must be one of 300, 1800, 3600, 10800, 43200, 86400, 259200, 604800",
+	}
+	if !strings.Contains(apiErr.Error(), "older version of nullbin-server") {
+		t.Fatalf("expected older-server hint in error, got %q", apiErr.Error())
+	}
+}
+
+type errAfterReader struct {
+	data []byte
+	done bool
+	err  error
+}
+
+func (e *errAfterReader) Read(p []byte) (int, error) {
+	if !e.done {
+		e.done = true
+		n := copy(p, e.data)
+		return n, nil
+	}
+	return 0, e.err
+}

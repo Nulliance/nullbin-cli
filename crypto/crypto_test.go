@@ -230,3 +230,17 @@ func TestPasswordNFCAndGenerate(t *testing.T) {
 		t.Fatalf("short password err = %v, want ErrPasswordTooShort", err)
 	}
 }
+
+func TestSecretStreamNilReceiverSafe(t *testing.T) {
+	var st *SecretStream
+	if err := st.Rekey(); err != ErrStreamFinalized {
+		t.Fatalf("nil Rekey = %v, want ErrStreamFinalized", err)
+	}
+	if _, err := st.Push([]byte("x"), nil, TagFinal); err != ErrStreamFinalized {
+		t.Fatalf("nil Push = %v, want ErrStreamFinalized", err)
+	}
+	if _, _, err := st.Pull(make([]byte, SecretStreamABytes), nil); err != ErrStreamFinalized {
+		t.Fatalf("nil Pull = %v, want ErrStreamFinalized", err)
+	}
+	st.Close()
+}

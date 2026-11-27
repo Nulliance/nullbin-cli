@@ -239,6 +239,9 @@ func (a *App) runVersion(ctx context.Context, args []string) error {
 	}
 
 	if serverFlag == "" {
+		if apiFlag != "" {
+			return errors.New("--api requires --server")
+		}
 		if jsonOut {
 			return a.writeJSON(map[string]any{
 				"cli_version": a.Build.Version,
@@ -285,7 +288,11 @@ func (a *App) runVersion(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.Stdout, "Site:        %s\n", info.SiteVersion)
 	}
 	if info.APIVersion != "" {
-		fmt.Fprintf(a.Stdout, "API:         %s (%s)\n", info.APIVersion, info.APIMode)
+		if info.APIMode != "" {
+			fmt.Fprintf(a.Stdout, "API:         %s (%s)\n", info.APIVersion, info.APIMode)
+		} else {
+			fmt.Fprintf(a.Stdout, "API:         %s\n", info.APIVersion)
+		}
 	}
 	return nil
 }

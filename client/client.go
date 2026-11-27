@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -221,7 +222,7 @@ func parseAPIError(resp *http.Response) *APIError {
 		}
 	}
 	if rawNext, ok := obj["next_chunk"].(json.Number); ok {
-		if n, err := rawNext.Int64(); err == nil && n >= 0 {
+		if n, err := rawNext.Int64(); err == nil && n >= 0 && n <= math.MaxInt32 {
 			ni := int(n)
 			apiErr.NextChunk = &ni
 		}

@@ -304,6 +304,7 @@ type V2EncryptReader struct {
 	metaOff      int
 	file         io.Reader
 	fileRemain   int64
+	fileChecked  bool
 	padRemain    int64
 	paddedTotal  int64
 	plainWritten int64
@@ -378,6 +379,8 @@ func (r *V2EncryptReader) Close() error {
 	clear(r.plainBuf)
 	clear(r.metaHeader)
 	clear(r.outBuf)
+	clear(r.prefix)
+	clear(r.headerBytes[:])
 	return nil
 }
 
@@ -405,6 +408,7 @@ func (r *V2EncryptReader) fillPlainChunk() (int, error) {
 			}
 			// Once all expected bytes are read, verify the file did not grow.
 			if r.fileRemain == 0 {
+				r.fileChecked = true
 				var extra [1]byte
 				en, eerr := r.file.Read(extra[:])
 				if en > 0 {
@@ -415,6 +419,18 @@ func (r *V2EncryptReader) fillPlainChunk() (int, error) {
 				}
 			}
 			continue
+		}
+		// Verify a 0-byte file did not grow before reading.
+		if r.file != nil && !r.fileChecked {
+			r.fileChecked = true
+			var extra [1]byte
+			en, eerr := r.file.Read(extra[:])
+			if en > 0 {
+				return 0, newErr(CodeFormat, "file grew while reading")
+			}
+			if eerr != nil && !errors.Is(eerr, io.EOF) {
+				return 0, eerr
+			}
 		}
 		// 3. Zero padding
 		if r.padRemain > 0 {
@@ -433,6 +449,9 @@ func (r *V2EncryptReader) fillPlainChunk() (int, error) {
 func (r *V2EncryptReader) Read(p []byte) (int, error) {
 	if r.closed {
 		return 0, io.ErrClosedPipe
+	}
+	if len(p) == 0 {
+		return 0, nil
 	}
 	if !r.headerSent {
 		r.outBuf = r.headerBytes[:]
@@ -863,6 +882,9 @@ func (f *v2FileReader) Read(p []byte) (int, error) {
 	if f.closed {
 		return 0, io.ErrClosedPipe
 	}
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if f.dec.fileRemain == 0 {
 		if !f.dec.finished {
 			if err := f.dec.verifyPaddingAndEOF(); err != nil {
@@ -888,6 +910,7 @@ func (f *v2FileReader) Read(p []byte) (int, error) {
 
 	if f.dec.fileRemain == 0 {
 		if err := f.dec.verifyPaddingAndEOF(); err != nil {
+			clear(p[:n])
 			f.dec.close()
 			return 0, err
 		}
@@ -982,6 +1005,9 @@ type v1FileReader struct {
 func (f *v1FileReader) Read(p []byte) (int, error) {
 	if f.closed {
 		return 0, io.ErrClosedPipe
+	}
+	if len(p) == 0 {
+		return 0, nil
 	}
 	for len(f.buf) == 0 {
 		if f.done {

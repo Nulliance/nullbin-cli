@@ -1,6 +1,8 @@
 package tty
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -67,4 +69,12 @@ func TestReadBoundedLine(t *testing.T) {
 	if err != nil || u != "https://paste.example.com/p/abc#xyz" {
 		t.Fatalf("ReadURLLine: %q, %v", u, err)
 	}
+
+	if _, err := ReadPasswordLine(zeroProgressReader{}); !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("expected io.ErrNoProgress on stalled reader, got %v", err)
+	}
 }
+
+type zeroProgressReader struct{}
+
+func (zeroProgressReader) Read([]byte) (int, error) { return 0, nil }

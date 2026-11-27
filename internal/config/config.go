@@ -53,6 +53,9 @@ func Load(path string) (Config, error) {
 	var cfg Config
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
+	if base == "" || base == "." || base == ".." {
+		return cfg, fmt.Errorf("invalid config path %s", path)
+	}
 
 	dirInfo, err := os.Lstat(dir)
 	if err != nil {
@@ -175,8 +178,24 @@ func Save(path string, cfg Config) error {
 
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
+	if base == "" || base == "." || base == ".." {
+		return fmt.Errorf("invalid config path %s", path)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("stat config directory %s: %w", dir, err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write into config directory %s: symbolic links are not allowed", dir)
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("config path parent %s is not a directory", dir)
+	}
+	if runtime.GOOS != "windows" && dirInfo.Mode().Perm()&0o002 != 0 {
+		return fmt.Errorf("config directory %s is world-writable (%04o); run: chmod 700 %s", dir, dirInfo.Mode().Perm(), dir)
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -184,8 +203,13 @@ func Save(path string, cfg Config) error {
 	}
 	defer root.Close()
 
-	if info, err := root.Lstat(base); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to overwrite symbolic link %s", path)
+	if info, err := root.Lstat(base); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to overwrite symbolic link %s", path)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("refusing to overwrite directory %s", path)
+		}
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

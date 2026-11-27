@@ -137,7 +137,10 @@ func (c *Client) Read(ctx context.Context, vl *link.ViewLink, opts ReadOptions) 
 		isBurn = readsRemaining != nil
 	}
 
-	pwCallback := func(attempt int, _ [format.SaltBytes]byte) ([]byte, error) {
+	pwCallback := func(attempt int, salt [format.SaltBytes]byte) ([]byte, error) {
+		if hasPeeked && (!peekedPrefix.Password || salt != peekedPrefix.Salt) {
+			return nil, &format.PasteError{Code: format.CodeTampered, Message: "paste header does not match peeked prefix"}
+		}
 		if attempt == 0 && len(resolvedPW) > 0 {
 			cp := append([]byte(nil), resolvedPW...)
 			return cp, nil
@@ -334,6 +337,13 @@ func newStallReader(ctx context.Context, body io.ReadCloser, timeout time.Durati
 }
 
 func (s *stallReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if err := s.ctx.Err(); err != nil {
+		_ = s.body.Close()
+		return 0, err
+	}
 	type res struct {
 		data []byte
 		err  error

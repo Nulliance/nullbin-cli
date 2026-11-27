@@ -62,6 +62,19 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 		return errors.New("unexpected positional arguments (note: --password does not take a value on the command line)")
 	}
 
+	passwordFDSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "password-fd" {
+			passwordFDSet = true
+		}
+	})
+	if passwordFDSet && passwordFD < 0 {
+		return errors.New("--password-fd must be a non-negative file descriptor")
+	}
+	if maxReads < 0 {
+		return fmt.Errorf("--max-reads must be between 1 and %d", client.MaxBurnReads)
+	}
+
 	// Ensure at most one password source is selected.
 	pwSources := 0
 	if promptPassword {
@@ -70,7 +83,7 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 	if passwordStdin {
 		pwSources++
 	}
-	if passwordFD >= 0 {
+	if passwordFDSet {
 		pwSources++
 	}
 	if generatePassword {
@@ -112,7 +125,7 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 
 	// Determine paste text.
 	text := textFlag
-	if text == "" && !passwordStdin {
+	if text == "" && !passwordStdin && !(passwordFDSet && passwordFD == 0) {
 		if len(fileInputs) == 0 || !a.stdinIsTTY() {
 			data, err := io.ReadAll(io.LimitReader(a.stdinReader(), format.MaxMetaBytes+1))
 			if err != nil {
@@ -233,6 +246,9 @@ func parseRecipientSpecs(count int, limitsCSV string, burn bool, maxReads int) (
 		return nil, nil
 	}
 	if limitsCSV != "" {
+		if burn || maxReads != 0 {
+			return nil, errors.New("cannot combine --recipient-limits with --burn or --max-reads (specify per-link limits in --recipient-limits)")
+		}
 		parts := strings.Split(limitsCSV, ",")
 		if count != 0 && count != len(parts) {
 			return nil, fmt.Errorf("--recipients %d does not match %d entries in --recipient-limits", count, len(parts))

@@ -145,7 +145,9 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*CreateResult,
 	defer nbcrypto.Zero(fragmentKey)
 
 	salt := make([]byte, nbcrypto.SaltBytes)
-	defer nbcrypto.Zero(salt)
+	defer func() {
+		nbcrypto.Zero(salt)
+	}()
 	if hasPassword {
 		var serr error
 		salt, serr = nbcrypto.RandomBytes(nbcrypto.SaltBytes)
@@ -250,6 +252,9 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*CreateResult,
 	var uploaded int64
 	for {
 		n, rerr := io.ReadFull(encReader, chunkBuf)
+		if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
+			return nil, rerr
+		}
 		if n > 0 {
 			if err := c.putChunk(ctx, apiOrigin, pasteID, chunkIndex, uploadToken, chunkBuf[:n]); err != nil {
 				return nil, err
@@ -259,9 +264,6 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*CreateResult,
 		}
 		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
 			break
-		}
-		if rerr != nil {
-			return nil, rerr
 		}
 	}
 	if uploaded != totalSize {
@@ -319,6 +321,7 @@ func (c *Client) initUpload(ctx context.Context, apiOrigin string, payload creat
 	if err != nil {
 		return "", "", "", err
 	}
+	defer clear(bodyBytes)
 
 	reqCtx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
 	defer cancel()

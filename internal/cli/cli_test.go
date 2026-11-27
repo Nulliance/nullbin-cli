@@ -302,4 +302,40 @@ func TestCLICreateReadDeleteAndSecurityGuards(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "v1.0.0-test") || !strings.Contains(out, `"api": "v1"`) {
 		t.Fatalf("version failed: code=%d out=%q err=%q", code, out, errOut)
 	}
+
+	// 8. Negative --password-fd, negative --max-reads, conflicting recipient flags,
+	// stdin collisions, and --api without --server must fail closed.
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"create negative password-fd -1", []string{"create", "--server", srvURL, "--text", "hi", "--password-fd", "-1"}, "non-negative"},
+		{"create negative password-fd -2", []string{"create", "--server", srvURL, "--text", "hi", "--password-fd", "-2"}, "non-negative"},
+		{"create negative max-reads", []string{"create", "--server", srvURL, "--text", "hi", "--max-reads", "-1"}, "--max-reads"},
+		{"create recipient-limits with burn", []string{"create", "--server", srvURL, "--text", "hi", "--burn", "--recipient-limits", "1,2"}, "cannot combine --recipient-limits"},
+		{"read negative password-fd", []string{"read", "--password-fd", "-1", burned.ViewURL}, "non-negative"},
+		{"read url-stdin with password-fd 0", []string{"read", "--url-stdin", "--password-fd", "0"}, "stdin"},
+		{"version api without server", []string{"version", "--api", srvURL}, "--api requires --server"},
+	} {
+		code, _, errOut = runCLI(t, hc, "", tc.args...)
+		if code == 0 || !strings.Contains(errOut, tc.want) {
+			t.Fatalf("%s: expected error containing %q, got code=%d err=%q", tc.name, tc.want, code, errOut)
+		}
+	}
+
+	// 9. Version text output omits empty () when server does not report mode.
+	noModeHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version.json":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/v1/version":
+			_, _ = w.Write([]byte(`{"version":"v2.0.0"}`))
+		}
+	})
+	hcNoMode := &http.Client{Transport: cliHandlerTransport{h: noModeHandler}}
+	code, out, errOut = runCLI(t, hcNoMode, "", "version", "--server", srvURL)
+	if code != 0 || !strings.Contains(out, "API:         v2.0.0\n") || strings.Contains(out, "()") {
+		t.Fatalf("version without mode formatted poorly: code=%d out=%q err=%q", code, out, errOut)
+	}
 }

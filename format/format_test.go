@@ -285,6 +285,106 @@ func TestStoredZipDeterministicAndCleanNames(t *testing.T) {
 	}
 }
 
+func TestStoredZipRejectsInPlaceContentMutation(t *testing.T) {
+	opens := 0
+	z, err := NewStoredZip([]ZipInput{
+		{
+			Name: "a.txt",
+			Size: 5,
+			Open: func() (io.ReadCloser, error) {
+				opens++
+				if opens == 1 {
+					return io.NopCloser(strings.NewReader("hello")), nil
+				}
+				return io.NopCloser(strings.NewReader("HELLO")), nil // same size, mutated content
+			},
+		},
+		{
+			Name: "b.txt",
+			Size: 5,
+			Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("world")), nil },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoredZip: %v", err)
+	}
+	rc := z.Open()
+	defer rc.Close()
+	if _, err := io.ReadAll(rc); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("expected CRC mismatch error on same-size mutation, got %v", err)
+	}
+}
+
+func TestZeroLengthReadsAndZeroByteFileGrowth(t *testing.T) {
+	// Zero-length Read must return (0, nil) without hanging on StoredZip.
+	z, err := NewStoredZip([]ZipInput{
+		{Name: "a.txt", Size: 3, Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("abc")), nil }},
+		{Name: "b.txt", Size: 3, Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("def")), nil }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zrc := z.Open()
+	defer zrc.Close()
+	if n, err := zrc.Read(nil); n != 0 || err != nil {
+		t.Fatalf("StoredZip Read(nil) = (%d, %v), want (0, nil)", n, err)
+	}
+	if _, err := io.ReadAll(zrc); err != nil {
+		t.Fatalf("StoredZip ReadAll after Read(nil): %v", err)
+	}
+
+	// Zero-length Read on V2EncryptReader and v2FileReader must not hang or corrupt data.
+	frag := bytes.Repeat([]byte{0x42}, KeyBytes)
+	prefix, err := BuildPrefix(false, make([]byte, SaltBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamKey, err := nbcrypto.DeriveStreamKey(frag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nbcrypto.Zero(streamKey)
+
+	fname := "sample.bin"
+	payload := []byte("payload-bytes")
+	enc, _, err := NewV2EncryptReader(streamKey, prefix, PasteMeta{Type: "file", Filename: &fname, Size: int64(len(payload))}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := enc.Read(nil); n != 0 || err != nil {
+		t.Fatalf("V2EncryptReader Read(nil) = (%d, %v), want (0, nil)", n, err)
+	}
+	blob, err := io.ReadAll(enc)
+	_ = enc.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := OpenBlob(bytes.NewReader(blob), frag, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if n, err := opened.File.Read(nil); n != 0 || err != nil {
+		t.Fatalf("v2FileReader Read(nil) = (%d, %v), want (0, nil)", n, err)
+	}
+	got, err := io.ReadAll(opened.File)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("v2FileReader mismatch: %q, %v", got, err)
+	}
+
+	// Zero-byte file that grew before reading must fail closed.
+	emptyName := "empty.txt"
+	encZero, _, err := NewV2EncryptReader(streamKey, prefix, PasteMeta{Type: "file", Filename: &emptyName, Size: 0}, strings.NewReader("unexpected-byte"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encZero.Close()
+	if _, err := io.ReadAll(encZero); err == nil || !strings.Contains(err.Error(), "grew") {
+		t.Fatalf("expected file grew error for 0-byte file with data, got %v", err)
+	}
+}
+
 func FuzzParsePrefix(f *testing.F) {
 	f.Add([]byte("NBN1\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))
 	f.Add([]byte("NBN1\x02\x010123456789abcdef"))

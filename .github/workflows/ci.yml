@@ -37,6 +37,31 @@ jobs:
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - name: Check tracked files for Trojan Source bidi characters
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+          bidi = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)) | {0x061C, 0x200E, 0x200F}
+          files = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\x00")
+          bad = []
+          for raw in files:
+              if not raw:
+                  continue
+              path = raw.decode("utf-8", "surrogateescape")
+              with open(path, "rb") as f:
+                  data = f.read()
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for idx, ch in enumerate(text):
+                  if ord(ch) in bidi:
+                      bad.append(f"{path}: offset {idx}: U+{ord(ch):04X}")
+                      break
+          if bad:
+              print("Raw bidirectional control characters detected:\n" + "\n".join(bad), file=sys.stderr)
+              sys.exit(1)
+          PY
       - name: go vet
         run: go vet ./...
       - name: staticcheck
@@ -51,6 +76,24 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseLink$' -fuzztime=15s ./link
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+
+  test-cross-os:
+    name: Go test -race (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: go test -race
+        run: go test -race -count=1 ./...
 
   interop-e2e:
     name: E2E interop (Go CLI <-> real nullbin-server <-> JS/libsodium)

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"math"
@@ -165,6 +166,7 @@ func NewStoredZip(files []ZipInput) (*StoredZip, error) {
 	var offset uint64
 	var centralBuf bytes.Buffer
 	copyBuf := make([]byte, 256*1024)
+	defer clear(copyBuf)
 
 	for i, f := range files {
 		if f.Size < 0 || uint64(f.Size) > math.MaxUint32 || offset > math.MaxUint32 {
@@ -247,7 +249,7 @@ func NewStoredZip(files []ZipInput) (*StoredZip, error) {
 
 	centralBytes := centralBuf.Bytes()
 	centralSize := uint64(len(centralBytes))
-	if offset > math.MaxUint32 || offset+centralSize > math.MaxUint32 {
+	if offset > math.MaxUint32 || centralSize > math.MaxUint32 || offset+centralSize+22 > math.MaxUint32 {
 		return nil, newErr(CodeTooLarge, "files are too large for standard zip")
 	}
 
@@ -284,6 +286,7 @@ type storedZipReader struct {
 	stage    int // 0=localHdr, 1=fileBody, 2=central, 3=eocd, 4=eof
 	bufOff   int
 	curFile  io.ReadCloser
+	curCRC   hash.Hash32
 	fileRead int64
 	closed   bool
 }
@@ -292,6 +295,10 @@ func (r *storedZipReader) Read(p []byte) (int, error) {
 	if r.closed {
 		return 0, io.ErrClosedPipe
 	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	zeroReads := 0
 	for {
 		switch r.stage {
 		case 0:
@@ -311,6 +318,7 @@ func (r *storedZipReader) Read(p []byte) (int, error) {
 				return 0, err
 			}
 			r.curFile = rc
+			r.curCRC = crc32.NewIEEE()
 			r.fileRead = 0
 			r.stage = 1
 		case 1:
@@ -320,11 +328,16 @@ func (r *storedZipReader) Read(p []byte) (int, error) {
 				en, eerr := r.curFile.Read(extra[:])
 				_ = r.curFile.Close()
 				r.curFile = nil
+				sum := r.curCRC.Sum32()
+				r.curCRC = nil
 				if en > 0 {
 					return 0, newErr(CodeFormat, "file grew while archiving")
 				}
 				if eerr != nil && !errors.Is(eerr, io.EOF) {
 					return 0, eerr
+				}
+				if sum != r.z.entries[r.entryIdx].crc {
+					return 0, newErr(CodeFormat, "file content changed while archiving")
 				}
 				r.entryIdx++
 				r.bufOff = 0
@@ -333,13 +346,24 @@ func (r *storedZipReader) Read(p []byte) (int, error) {
 			}
 			limit := min(int64(len(p)), want-r.fileRead)
 			n, err := r.curFile.Read(p[:limit])
-			r.fileRead += int64(n)
+			if n > 0 {
+				zeroReads = 0
+				_, _ = r.curCRC.Write(p[:n])
+				r.fileRead += int64(n)
+			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					_ = r.curFile.Close()
 					r.curFile = nil
+					sum := r.curCRC.Sum32()
+					r.curCRC = nil
 					if r.fileRead != want {
+						clear(p[:n])
 						return 0, newErr(CodeFormat, "file shrank while archiving")
+					}
+					if sum != r.z.entries[r.entryIdx].crc {
+						clear(p[:n])
+						return 0, newErr(CodeFormat, "file content changed while archiving")
 					}
 					r.entryIdx++
 					r.bufOff = 0
@@ -351,10 +375,19 @@ func (r *storedZipReader) Read(p []byte) (int, error) {
 				}
 				_ = r.curFile.Close()
 				r.curFile = nil
-				return n, err
+				r.curCRC = nil
+				clear(p[:n])
+				return 0, err
 			}
 			if n > 0 {
 				return n, nil
+			}
+			zeroReads++
+			if zeroReads > 100 {
+				_ = r.curFile.Close()
+				r.curFile = nil
+				r.curCRC = nil
+				return 0, io.ErrNoProgress
 			}
 		case 2:
 			if r.bufOff < len(r.z.central) {
@@ -383,6 +416,7 @@ func (r *storedZipReader) Close() error {
 		return nil
 	}
 	r.closed = true
+	r.curCRC = nil
 	if r.curFile != nil {
 		err := r.curFile.Close()
 		r.curFile = nil

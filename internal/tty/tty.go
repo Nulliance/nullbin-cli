@@ -105,9 +105,11 @@ func readBoundedLine(r io.Reader, maxBytes int) ([]byte, error) {
 	var b [1]byte
 	defer clear(b[:])
 
+	zeroReads := 0
 	for {
 		n, err := r.Read(b[:])
 		if n > 0 {
+			zeroReads = 0
 			if b[0] == '\n' {
 				break
 			}
@@ -124,6 +126,13 @@ func readBoundedLine(r io.Reader, maxBytes int) ([]byte, error) {
 			}
 			nbcrypto.Zero(line)
 			return nil, err
+		}
+		if n == 0 {
+			zeroReads++
+			if zeroReads > 100 {
+				nbcrypto.Zero(line)
+				return nil, io.ErrNoProgress
+			}
 		}
 	}
 	line = bytes.TrimSuffix(line, []byte("\r"))
