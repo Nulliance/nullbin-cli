@@ -229,16 +229,19 @@ func ParseDeleteFragment(fragment string) (token string, hasRecipients bool, err
 // is assumed automatically; explicit "http://" is rejected for non-loopback hosts.
 func ParseViewURL(rawURL string) (*ViewLink, error) {
 	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" || hasForbiddenRawChars(rawURL) {
+		return nil, ErrInvalidURL
+	}
 	normalized, err := normalizeImplicitHTTPS(rawURL)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
 	u, err := url.Parse(normalized)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" {
+	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" || u.RawPath != "" {
 		return nil, ErrInvalidURL
 	}
 	originRaw := u.Scheme + "://" + u.Host
-	origin, err := ValidateOrigin(originRaw)
+	origin, err := validateOrigin(originRaw, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -266,16 +269,19 @@ func ParseViewURL(rawURL string) (*ViewLink, error) {
 // "https://" is assumed automatically; explicit "http://" is rejected for non-loopback hosts.
 func ParseDeleteURL(rawURL string) (*DeleteLink, error) {
 	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" || hasForbiddenRawChars(rawURL) {
+		return nil, ErrInvalidURL
+	}
 	normalized, err := normalizeImplicitHTTPS(rawURL)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
 	u, err := url.Parse(normalized)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" {
+	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Opaque != "" || u.RawPath != "" {
 		return nil, ErrInvalidURL
 	}
 	originRaw := u.Scheme + "://" + u.Host
-	origin, err := ValidateOrigin(originRaw)
+	origin, err := validateOrigin(originRaw, false, false)
 	if err != nil {
 		return nil, err
 	}
