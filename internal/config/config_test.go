@@ -58,4 +58,12 @@ func TestConfigSaveLoadAndResolve(t *testing.T) {
 	if _, _, err := ResolveServer("", "", "", "", Config{}); err == nil {
 		t.Fatal("expected error when no server is configured")
 	}
+
+	// Refuse HTTPS server paired with plain HTTP API origin.
+	if err := Save(filepath.Join(dir, "downgrade.json"), Config{Server: "paste.example.com", API: "http://127.0.0.1:8080"}); err == nil {
+		t.Fatal("expected Save to refuse HTTP API with HTTPS server")
+	}
+	if _, _, err := ResolveServer("paste.example.com", "http://127.0.0.1:8080", "", "", Config{}); err == nil {
+		t.Fatal("expected ResolveServer to refuse HTTP API with HTTPS server")
+	}
 }

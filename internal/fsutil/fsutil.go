@@ -1,5 +1,5 @@
-// Package fsutil provides safe, verify-before-commit file output and safe
-// local file input helpers for nullbin-cli.
+// Package fsutil provides safe, verify-before-commit file output (confined with
+// os.Root) and TOCTOU-checked local file input helpers for nullbin-cli.
 package fsutil
 
 import (
@@ -19,13 +19,15 @@ import (
 )
 
 // OpenLocalFile validates that path is a regular readable file and returns a
-// client.FileInput ready for streaming encryption.
+// client.FileInput ready for streaming encryption. Each open re-verifies that
+// the opened descriptor is the same regular file (defending against TOCTOU
+// swaps to FIFOs, devices, or symlinks).
 func OpenLocalFile(path string) (client.FileInput, error) {
-	info, err := os.Stat(path)
+	initialInfo, err := os.Stat(path)
 	if err != nil {
 		return client.FileInput{}, fmt.Errorf("stat %s: %w", path, err)
 	}
-	if !info.Mode().IsRegular() {
+	if !initialInfo.Mode().IsRegular() {
 		return client.FileInput{}, fmt.Errorf("%s is not a regular file", path)
 	}
 	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
@@ -35,9 +37,22 @@ func OpenLocalFile(path string) (client.FileInput, error) {
 	return client.FileInput{
 		Name: filepath.Base(path),
 		MIME: mimeType,
-		Size: info.Size(),
+		Size: initialInfo.Size(),
 		Open: func() (io.ReadCloser, error) {
-			return os.Open(path)
+			f, err := os.Open(path)
+			if err != nil {
+				return nil, err
+			}
+			fi, err := f.Stat()
+			if err != nil {
+				_ = f.Close()
+				return nil, err
+			}
+			if !fi.Mode().IsRegular() || !os.SameFile(initialInfo, fi) {
+				_ = f.Close()
+				return nil, fmt.Errorf("%s changed while opening", path)
+			}
+			return f, nil
 		},
 	}, nil
 }
@@ -47,6 +62,13 @@ func OpenLocalFile(path string) (client.FileInput, error) {
 // strictly sanitized with format.CleanFileName and placed inside outDir.
 func ResolveOutputPath(outDir, suggestedName, explicitOut string) (string, error) {
 	if explicitOut != "" {
+		if strings.HasSuffix(explicitOut, string(os.PathSeparator)) || strings.HasSuffix(explicitOut, "/") {
+			return "", errors.New("output path must name a file, not a directory")
+		}
+		base := filepath.Base(explicitOut)
+		if base == "" || base == "." || base == ".." {
+			return "", errors.New("unsafe output filename")
+		}
 		return explicitOut, nil
 	}
 	if outDir == "" {
@@ -60,33 +82,37 @@ func ResolveOutputPath(outDir, suggestedName, explicitOut string) (string, error
 }
 
 // SaveVerifiedStream streams decrypted attachment bytes into a private (0600)
-// temporary file in the destination directory and atomically commits it to
-// destPath ONLY after r reaches io.EOF cleanly (meaning TAG_FINAL, zero
-// padding, and absence of trailing bytes have all been verified).
+// temporary file inside an os.Root opened on the destination directory, and
+// atomically commits it to destPath ONLY after r reaches io.EOF cleanly
+// (meaning TAG_FINAL, zero padding, and absence of trailing bytes have all
+// been verified).
 //
 // On any error, the temporary file is removed and destPath is untouched.
 // Existing destinations are never overwritten unless force is true; symlinks
 // and directories at destPath are always refused.
 func SaveVerifiedStream(destPath string, force bool, r io.Reader) (int64, error) {
-	if err := checkDestination(destPath, force); err != nil {
-		return 0, err
+	dir := filepath.Dir(destPath)
+	base := filepath.Base(destPath)
+	if base == "" || base == "." || base == ".." || strings.ContainsAny(base, `/\`) {
+		return 0, errors.New("unsafe destination filename")
 	}
 
-	dir := filepath.Dir(destPath)
-	dirInfo, err := os.Stat(dir)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return 0, fmt.Errorf("destination directory %s: %w", dir, err)
+		return 0, fmt.Errorf("opening destination directory %s: %w", dir, err)
 	}
-	if !dirInfo.IsDir() {
-		return 0, fmt.Errorf("destination parent %s is not a directory", dir)
+	defer root.Close()
+
+	if err := checkRootDestination(root, base, destPath, force); err != nil {
+		return 0, err
 	}
 
 	var rnd [12]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
 		return 0, err
 	}
-	tmpPath := filepath.Join(dir, ".nullbin-tmp-"+hex.EncodeToString(rnd[:]))
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	tmpName := ".nullbin-tmp-" + hex.EncodeToString(rnd[:])
+	f, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("creating temporary file: %w", err)
 	}
@@ -95,11 +121,13 @@ func SaveVerifiedStream(destPath string, force bool, r io.Reader) (int64, error)
 	defer func() {
 		if !committed {
 			_ = f.Close()
-			_ = os.Remove(tmpPath)
+			_ = root.Remove(tmpName)
 		}
 	}()
 
-	written, err := io.Copy(f, r)
+	copyBuf := make([]byte, 64*1024)
+	defer clear(copyBuf)
+	written, err := io.CopyBuffer(f, r, copyBuf)
 	if err != nil {
 		return 0, err
 	}
@@ -111,29 +139,37 @@ func SaveVerifiedStream(destPath string, force bool, r io.Reader) (int64, error)
 	}
 
 	// Re-check destination right before commit.
-	if err := checkDestination(destPath, force); err != nil {
+	if err := checkRootDestination(root, base, destPath, force); err != nil {
 		return 0, err
 	}
 
-	if !force && runtime.GOOS != "windows" {
-		// Atomic no-clobber commit on POSIX.
-		if err := os.Link(tmpPath, destPath); err != nil {
+	if runtime.GOOS == "windows" {
+		if err := os.Rename(filepath.Join(dir, tmpName), filepath.Join(dir, base)); err != nil {
 			return 0, fmt.Errorf("committing %s: %w", destPath, err)
 		}
-		_ = os.Remove(tmpPath)
 		committed = true
 		return written, nil
 	}
 
-	if err := os.Rename(tmpPath, destPath); err != nil {
+	if !force {
+		// Atomic no-clobber commit on POSIX inside os.Root.
+		if err := root.Link(tmpName, base); err != nil {
+			return 0, fmt.Errorf("committing %s: %w", destPath, err)
+		}
+		_ = root.Remove(tmpName)
+		committed = true
+		return written, nil
+	}
+
+	if err := root.Rename(tmpName, base); err != nil {
 		return 0, fmt.Errorf("committing %s: %w", destPath, err)
 	}
 	committed = true
 	return written, nil
 }
 
-func checkDestination(destPath string, force bool) error {
-	info, err := os.Lstat(destPath)
+func checkRootDestination(root *os.Root, base, displayPath string, force bool) error {
+	info, err := root.Lstat(base)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -141,13 +177,13 @@ func checkDestination(destPath string, force bool) error {
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to overwrite symbolic link %s", destPath)
+		return fmt.Errorf("refusing to overwrite symbolic link %s", displayPath)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("destination %s is a directory", destPath)
+		return fmt.Errorf("destination %s is a directory", displayPath)
 	}
 	if !force {
-		return fmt.Errorf("destination %s already exists (use --force to overwrite)", destPath)
+		return fmt.Errorf("destination %s already exists (use --force to overwrite)", displayPath)
 	}
 	return nil
 }

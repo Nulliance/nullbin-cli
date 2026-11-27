@@ -81,9 +81,12 @@ func GeneratePassword() ([]byte, error) {
 	return out, nil
 }
 
-// ValidateNewPassword checks that a user-chosen password meets Nullbin's
-// minimum length requirement (at least 8 characters).
+// ValidateNewPassword checks that a user-chosen password is valid UTF-8 and
+// meets Nullbin's minimum length requirement (at least 8 characters).
 func ValidateNewPassword(password []byte) error {
+	if !utf8.Valid(password) {
+		return errors.New("crypto: password must be valid UTF-8")
+	}
 	if utf8.RuneCount(password) < MinPasswordLength {
 		return ErrPasswordTooShort
 	}

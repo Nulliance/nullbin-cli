@@ -31,6 +31,7 @@ type Client struct {
 	siteOrigin   string
 	explicitAPI  string
 	apiOrigin    string
+	siteVersion  string
 	discoverOnce sync.Once
 	discoverErr  error
 	httpClient   *http.Client
@@ -74,15 +75,19 @@ func newHardenedHTTPClient() *http.Client {
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion:    tls.VersionTLS12,
+			Renegotiation: tls.RenegotiateNever,
 		},
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          8,
-		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: defaultRequestTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-		DisableCompression:    true,
+		ForceAttemptHTTP2:      true,
+		MaxIdleConns:           8,
+		MaxIdleConnsPerHost:    4,
+		MaxConnsPerHost:        4,
+		IdleConnTimeout:        60 * time.Second,
+		TLSHandshakeTimeout:    15 * time.Second,
+		ResponseHeaderTimeout:  defaultRequestTimeout,
+		ExpectContinueTimeout:  1 * time.Second,
+		MaxResponseHeaderBytes: 64 * 1024,
+		DisableCompression:     true,
 	}
 	return &http.Client{
 		Transport:     tr,
@@ -178,6 +183,9 @@ func readBoundedJSONObject(resp *http.Response, limit int64) (map[string]any, er
 	}
 	if obj == nil {
 		return nil, errors.New("server sent invalid JSON object")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("server sent trailing data after JSON")
 	}
 	return obj, nil
 }

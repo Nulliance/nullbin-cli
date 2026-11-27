@@ -145,6 +145,7 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*CreateResult,
 	defer nbcrypto.Zero(fragmentKey)
 
 	salt := make([]byte, nbcrypto.SaltBytes)
+	defer nbcrypto.Zero(salt)
 	if hasPassword {
 		var serr error
 		salt, serr = nbcrypto.RandomBytes(nbcrypto.SaltBytes)
@@ -244,6 +245,7 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*CreateResult,
 
 	// 2. PUT /api/v1/pastes/{id}/chunks/{n} in 4 MiB chunks.
 	chunkBuf := make([]byte, UploadChunkSize)
+	defer clear(chunkBuf)
 	chunkIndex := 0
 	var uploaded int64
 	for {

@@ -30,36 +30,39 @@ In Nullbin's browser threat model, **R1 (Malicious frontend JavaScript)** is the
   - `read`, `delete`, `recipients list`, and `recipients revoke` support `--url-stdin` so `#key` and `#d.<token>` never enter `argv`.
   - Secrets, keys, passwords, and capability tokens are never included in error messages or logs.
 
-### 3.2 Memory Hygiene
-- **Threat:** Key material or passwords lingering in heap buffers after use.
+### 3.2 Process & Memory Hygiene
+- **Threat:** Key material or passwords lingering in heap buffers, read-ahead buffers, core dumps, or exposed to same-user debuggers.
 - **Mitigations:**
-  - `fragmentKey`, `master`, `streamKey`, `commentKey`, `recipientSecrets`, secretstream key/nonce state, plaintext frame buffers, and password byte slices are explicitly zeroed via `clear(...)` immediately after use and in `defer`/`Close()` paths.
-  - `DeriveMasterKey` allocates a fresh NFC buffer so caller-owned slices are never unexpectedly aliased or mutated.
-- **Residual risk:** Go's garbage collector may copy stack frames or retain strings (such as CLI arguments or Go `string` paste text) until overwritten by subsequent allocations; swap/hibernation files are outside the CLI's control.
+  - At startup, `internal/procsec.Harden()` sets `umask 077` and `RLIMIT_CORE=0` on Unix, and sets `PR_SET_DUMPABLE=0` on Linux to block core dumps and non-root `ptrace` / `/proc/<pid>/mem` reads.
+  - `fragmentKey`, `master`, `streamKey`, `commentKey`, `recipientSecrets`, `salt`, secretstream key/nonce state, plaintext frame slices (cleared immediately as consumed), upload chunk buffers, file copy buffers, and password byte slices are explicitly zeroed via `clear(...)`.
+  - Secret lines (`--password-stdin`, `--password-fd`, `--url-stdin`) are read directly byte-by-byte without `bufio.Reader` so no internal read-ahead buffer retains secret bytes.
+  - `DeriveMasterKey` allocates a fresh NFC buffer so caller-owned slices are never aliased or mutated.
+- **Residual risk:** Go's garbage collector may copy stack frames or retain immutable Go `string` values (such as CLI arguments or decrypted paste text) until reclaimed; swap/hibernation files are outside the CLI's control.
 
 ### 3.3 Terminal Injection & Trojan Source (A7)
-- **Threat:** Untrusted paste text printed to a terminal may contain ANSI CSI/OSC escape sequences (e.g., OSC 52 clipboard write, window title manipulation, fake prompt spoofing via standalone `\r`) or bidirectional/invisible Unicode controls (CVE-2021-42574).
+- **Threat:** Untrusted paste text, filenames, server version fields, or error strings printed to a terminal may contain ANSI CSI/OSC escape sequences (e.g., OSC 52 clipboard write, title manipulation, fake prompt spoofing via standalone `\r`) or bidirectional/invisible Unicode controls (CVE-2021-42574).
 - **Mitigations:**
-  - When stdout is an interactive TTY (unless `--raw` is explicitly passed), `SanitizeForTTY` strips 7-bit/8-bit CSI/OSC/DCS/APC/PM/SOS escape sequences and visibly escapes C0/C1 controls, standalone `\r`, and Unicode format/bidi characters.
+  - When stdout is an interactive TTY (unless `--raw` is explicitly passed), `SanitizeForTTY` strips 7-bit/8-bit CSI/OSC/DCS/APC/PM/SOS escape sequences and visibly escapes C0/C1 controls, standalone `\r`, and all Unicode format/bidi/hidden filler/default-ignorable runes.
   - `HasHiddenChars` detects Trojan Source / invisible / spoofed joiner characters (mirroring `nullbin-server/web/src/hidden.ts`) and emits a warning on stderr (and sets `hidden_chars_detected: true` in `--json` output).
-  - Server API error messages are filtered against an explicit allowlist of known Nullbin error strings; unknown server error text is replaced with `HTTP <status>` so a hostile server cannot inject terminal escapes via error responses.
+  - Server API error messages are filtered against an explicit allowlist of known Nullbin error strings; server-reported `version` and `mode` strings are strictly allowlisted (`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$` and `api|combined`); all CLI error and path status lines are sanitized via `SanitizeSingleLine`.
 
 ### 3.4 Attachment Extraction & Filesystem Attacks (A7)
-- **Threat:** A malicious paste or tampered stream attempts to write partial/unverified bytes to disk, traverse directories (`../../`), disguise file extensions with bidi overrides (`invoice\u202Efdp.exe`), overwrite existing files or follow symlinks, or target Windows reserved device names (`CON`, `NUL`, `COM1`).
+- **Threat:** A malicious paste or tampered stream attempts to write partial/unverified bytes to disk, traverse directories (`../../`), swap directories or files via TOCTOU symlinks, disguise file extensions with bidi overrides (`invoice\u202Efdp.exe`), overwrite existing files, or target Windows reserved device names (`CON`, `NUL`, `COM1`).
 - **Mitigations:**
-  - **Verify-before-commit:** Decrypted attachment bytes stream to a private (`0600`, `O_CREATE|O_EXCL`) temporary file in the destination directory and are atomically committed ONLY after `TAG_FINAL`, exact Padmé length, all-zero padding, and absence of trailing bytes are verified. Any failure deletes the temporary file immediately.
+  - **`os.Root` confinement & verify-before-commit:** All attachment writes run inside `os.OpenRoot(destDir)` into a private (`0600`, `O_CREATE|O_EXCL`) temporary file and are atomically committed ONLY after `TAG_FINAL`, exact Padmé length, all-zero padding, and absence of trailing bytes are verified. Any failure deletes the temporary file immediately.
+  - **Input file TOCTOU defense:** `OpenLocalFile` re-verifies `Mode().IsRegular()` and `os.SameFile` on each open before encrypting or zipping.
   - **Filename sanitization:** `format.CleanFileName` applies Unicode NFC, replaces path separators, drive-letter colons, control/bidi/default-ignorable runes, strips leading/trailing dots and spaces, caps length at 200 runes, and prefixes Windows device names with `_`.
-  - **No clobber / no symlink follow:** Refuses to overwrite existing files unless `--force` is passed (using atomic `os.Link` no-clobber on POSIX), and always refuses overwriting symlinks or directories.
+  - **No clobber / no symlink follow:** Refuses to overwrite existing files unless `--force` is passed (using atomic `root.Link` no-clobber on POSIX), and always refuses overwriting symlinks or directories.
 
 ### 3.5 Transport, Discovery & Configuration Attacks (A1, A2, A5)
-- **Threat:** MITM downgrade to HTTP, SSRF/redirect trickery leaking capability headers (`Nullbin-Upload-Token`, `Nullbin-Burn-Token`, `Nullbin-Delete-Token`), memory exhaustion via unbounded responses, or world-readable config tampering.
+- **Threat:** MITM downgrade to HTTP, hostname homograph/parser smuggling, prefix swapping between `/prefix` and `/read`, SSRF/redirect trickery leaking capability headers (`Nullbin-Upload-Token`, `Nullbin-Burn-Token`, `Nullbin-Delete-Token`), memory exhaustion via unbounded responses, or world-readable config tampering.
 - **Mitigations:**
   - Fail-closed server selection (no hardcoded default server).
-  - Strict HTTPS enforcement; plain `http://` is permitted only for `localhost`, `127.0.0.1`, and `[::1]`.
+  - Bare hostnames default to `https://` and connect over TLS 1.2+ (`Renegotiation: tls.RenegotiateNever`) with full certificate verification; explicit `http://` is rejected everywhere except loopback (`localhost`, `127.0.0.1`, `::1`). Hostnames are restricted to strict RFC 1123 ASCII or plain IP literals (no percent-encoding, backslashes, IPv6 zone IDs, non-ASCII homographs, or bare non-HTTPS URI schemes).
   - HTTP redirects are unconditionally disabled (`CheckRedirect` always returns an error), preventing capability tokens from ever being forwarded to another host.
-  - No cookies (`Jar: nil`), no `Referer`, `Cache-Control: no-store`, TLS 1.2+ minimum, bounded JSON reads (128 KiB), exact 22-byte prefix reads, request timeouts, and 150-second download stall timeouts.
-  - `version.json` discovery refuses HTTPS→HTTP downgrades and non-canonical origins.
-  - `~/.config/nullbin/config.json` rejects symlinks, non-regular files, unknown JSON fields, and POSIX permissions looser than `0600`.
+  - No cookies (`Jar: nil`), no `Referer`, `Cache-Control: no-store`, 64 KiB response header cap, bounded JSON reads (128 KiB, trailing JSON rejected), exact 22-byte prefix reads (verified identical between `GET /prefix` and `POST /read`), request timeouts, and race-free 150-second download stall timeouts.
+  - `version.json` discovery requires canonical origins and refuses HTTPS→HTTP downgrades.
+  - `~/.config/nullbin/config.json` is opened inside `os.Root`, rejects symlinks (file or parent dir), world-writable parent directories, non-regular files, unknown JSON fields, HTTPS→HTTP split pairs, and POSIX permissions looser than `0600`.
 
 ### 3.6 Accidental Burn Consumption
 - **Threat:** Opening a burn-after-reading paste or limited recipient link unintentionally consumes an open (including in scripts or when a wrong password is entered).

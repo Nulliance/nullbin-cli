@@ -466,3 +466,86 @@ func TestClientRejectsRedirectsAndUntrustedErrors(t *testing.T) {
 		t.Fatalf("untrusted error text leaked: %q", apiErr.Message)
 	}
 }
+
+func TestClientDropsMaliciousVersionStringsAndRejectsTrailingJSON(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version.json":
+			_, _ = w.Write([]byte(`{"version":"\u001b]52;c;evil\u0007","api_origin":"same-origin"}`))
+		case "/api/v1/version":
+			_, _ = w.Write([]byte(`{"version":"v1.2.3\nINJECTED","mode":"evil-mode"}`))
+		}
+	})
+	c, err := New("paste.example.test", WithHTTPClient(&http.Client{Transport: handlerTransport{h: h}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := c.ServerVersion(context.Background())
+	if err != nil {
+		t.Fatalf("ServerVersion: %v", err)
+	}
+	if info.SiteVersion != "" || info.APIVersion != "" || info.APIMode != "" {
+		t.Fatalf("malicious version fields were not dropped: %+v", info)
+	}
+
+	// Trailing garbage after JSON object must fail closed.
+	hTrailing := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"v1.0.0","api_origin":"same-origin"}{"extra":1}`))
+	})
+	c2, err := New("paste.example.test", WithHTTPClient(&http.Client{Transport: handlerTransport{h: hTrailing}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c2.ResolveAPIOrigin(context.Background()); err == nil {
+		t.Fatal("expected trailing JSON data to be rejected")
+	}
+}
+
+func TestClientRejectsSwappedBurnPrefix(t *testing.T) {
+	ms := newMockServer()
+	baseURL := "https://paste.example.test"
+	baseHandler := ms.handler()
+
+	// Create a normal burn paste first.
+	c, err := New(baseURL, WithHTTPClient(&http.Client{Transport: handlerTransport{h: baseHandler}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := c.Create(context.Background(), CreateOptions{
+		Text:      "burn payload",
+		ExpiresIn: 300,
+		Burn:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Now wrap the handler so GET /prefix returns a subtly different valid v1 prefix
+	// while POST /read returns the real v2 blob.
+	swappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/prefix") {
+			fake := make([]byte, format.PrefixBytes)
+			copy(fake[0:4], format.Magic[:])
+			fake[4] = format.VersionUnpadded
+			_, _ = w.Write(fake)
+			return
+		}
+		baseHandler.ServeHTTP(w, r)
+	})
+
+	vl, err := link.ParseViewURL(created.ViewURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vl.Close()
+
+	cSwapped, err := New(baseURL, WithHTTPClient(&http.Client{Transport: handlerTransport{h: swappedHandler}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cSwapped.Read(context.Background(), vl, ReadOptions{})
+	var pe *format.PasteError
+	if !errors.As(err, &pe) || pe.Code != format.CodeTampered {
+		t.Fatalf("expected CodeTampered on prefix swap, got %v", err)
+	}
+}

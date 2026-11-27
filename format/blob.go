@@ -818,6 +818,7 @@ func (d *v2Decoder) readExactPlain(n int) ([]byte, error) {
 			}
 		}
 		k := copy(out[off:], d.buf)
+		clear(d.buf[:k])
 		d.buf = d.buf[k:]
 		off += k
 	}
@@ -878,6 +879,7 @@ func (f *v2FileReader) Read(p []byte) (int, error) {
 	}
 	take := int(min(int64(len(p)), min(int64(len(f.dec.buf)), f.dec.fileRemain)))
 	n := copy(p[:take], f.dec.buf[:take])
+	clear(f.dec.buf[:n])
 	f.dec.buf = f.dec.buf[n:]
 	f.dec.fileRemain -= int64(n)
 
@@ -1026,6 +1028,7 @@ func (f *v1FileReader) Read(p []byte) (int, error) {
 	}
 
 	n := copy(p, f.buf)
+	clear(f.buf[:n])
 	f.buf = f.buf[n:]
 	if len(f.buf) == 0 && f.done {
 		return n, io.EOF

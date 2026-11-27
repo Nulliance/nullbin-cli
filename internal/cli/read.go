@@ -120,10 +120,16 @@ func (a *App) runRead(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		if len(prePassword) == 0 {
+			return errors.New("empty password provided on stdin")
+		}
 	case passwordFD >= 0:
 		prePassword, err = tty.ReadPasswordFD(passwordFD)
 		if err != nil {
 			return err
+		}
+		if len(prePassword) == 0 {
+			return errors.New("empty password provided on password file descriptor")
 		}
 	}
 
@@ -247,7 +253,7 @@ func (a *App) runRead(ctx context.Context, args []string) error {
 	}
 
 	if savedPath != "" {
-		fmt.Fprintf(a.Stderr, "Saved verified attachment (%d bytes) to %s\n", savedBytes, savedPath)
+		fmt.Fprintf(a.Stderr, "Saved verified attachment (%d bytes) to %s\n", savedBytes, tty.SanitizeSingleLine(savedPath))
 	}
 	if res.ReadsRemaining != nil {
 		if *res.ReadsRemaining == 0 {

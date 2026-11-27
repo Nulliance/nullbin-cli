@@ -41,6 +41,17 @@ func TestSanitizeForTTY(t *testing.T) {
 	if mod || plain != "hello\tworld\nline 2" {
 		t.Fatalf("plain text unexpectedly modified: mod=%v out=%q", mod, plain)
 	}
+
+	// Invisible Hangul filler, CGJ, and Braille blank must also be visibly escaped.
+	hidden, mod := SanitizeForTTY("a\u3164b\u034Fc\u2800d")
+	if !mod || !strings.Contains(hidden, "\\u3164") || !strings.Contains(hidden, "\\u034F") || !strings.Contains(hidden, "\\u2800") {
+		t.Fatalf("invisible fillers not escaped: mod=%v out=%q", mod, hidden)
+	}
+
+	single := SanitizeSingleLine("err\x1b[31m!\nsecond\tline")
+	if strings.ContainsAny(single, "\x1b\n\t") || !strings.Contains(single, "\\n") {
+		t.Fatalf("SanitizeSingleLine leaked control chars: %q", single)
+	}
 }
 
 func TestReadBoundedLine(t *testing.T) {

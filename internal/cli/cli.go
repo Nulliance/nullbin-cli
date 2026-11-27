@@ -134,7 +134,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		fmt.Fprintf(a.Stderr, "error: %v\n", err)
+		fmt.Fprintf(a.Stderr, "error: %s\n", tty.SanitizeSingleLine(err.Error()))
 		return 1
 	}
 	return 0

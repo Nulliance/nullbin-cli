@@ -4,7 +4,6 @@
 package tty
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/subtle"
 	"errors"
@@ -99,15 +98,34 @@ func ReadURLLine(r io.Reader) (string, error) {
 	return s, nil
 }
 
+// readBoundedLine reads one line directly byte-by-byte without bufio.Reader so
+// no unzeroed internal read-ahead buffer retains secret bytes in memory.
 func readBoundedLine(r io.Reader, maxBytes int) ([]byte, error) {
-	lr := io.LimitReader(r, int64(maxBytes)+2)
-	br := bufio.NewReader(lr)
-	line, err := br.ReadBytes('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		nbcrypto.Zero(line)
-		return nil, err
+	line := make([]byte, 0, 128)
+	var b [1]byte
+	defer clear(b[:])
+
+	for {
+		n, err := r.Read(b[:])
+		if n > 0 {
+			if b[0] == '\n' {
+				break
+			}
+			// Allow one extra byte for a trailing '\r' before '\n'.
+			if len(line) > maxBytes {
+				nbcrypto.Zero(line)
+				return nil, fmt.Errorf("input line exceeds %d bytes", maxBytes)
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			nbcrypto.Zero(line)
+			return nil, err
+		}
 	}
-	line = bytes.TrimSuffix(line, []byte("\n"))
 	line = bytes.TrimSuffix(line, []byte("\r"))
 	if len(line) > maxBytes {
 		nbcrypto.Zero(line)
@@ -328,8 +346,9 @@ func SanitizeForTTY(text string) (string, bool) {
 			continue
 		}
 
-		// Bidi controls and hidden format characters: render visibly so Trojan Source cannot spoof output.
-		if unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+		// Bidi controls, format characters, and invisible/Trojan-Source fillers:
+		// render visibly so untrusted paste text cannot spoof terminal output.
+		if isHiddenTextRune(r) {
 			modified = true
 			if r <= 0xFFFF {
 				fmt.Fprintf(&b, "\\u%04X", r)
@@ -345,6 +364,15 @@ func SanitizeForTTY(text string) (string, bool) {
 	}
 
 	return b.String(), modified
+}
+
+// SanitizeSingleLine neutralizes terminal escape sequences, control characters,
+// newlines, and hidden/bidi runes for single-line status or error output.
+func SanitizeSingleLine(s string) string {
+	cleaned, _ := SanitizeForTTY(s)
+	cleaned = strings.ReplaceAll(cleaned, "\n", "\\n")
+	cleaned = strings.ReplaceAll(cleaned, "\t", " ")
+	return cleaned
 }
 
 func skipEscapeSequence(s string, i int) int {

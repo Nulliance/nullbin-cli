@@ -122,9 +122,11 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 				return errors.New("paste text exceeds 16 MiB limit")
 			}
 			if !utf8.Valid(data) {
+				clear(data)
 				return errors.New("stdin contains invalid UTF-8 (attach binary data with --file)")
 			}
 			text = string(data)
+			clear(data)
 		}
 	}
 	if text == "" && len(fileInputs) == 0 {
@@ -133,7 +135,6 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 
 	// Obtain password securely (never from argv).
 	var password []byte
-	var generatedPW string
 	defer func() {
 		nbcrypto.Zero(password)
 	}()
@@ -165,7 +166,6 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		generatedPW = string(password)
 	}
 
 	c, err := a.newClient(serverOrigin, apiOrigin)
@@ -195,6 +195,10 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 	}
 
 	if jsonOut {
+		generatedPW := ""
+		if generatePassword {
+			generatedPW = string(password)
+		}
 		out := struct {
 			*client.CreateResult
 			GeneratedPassword string `json:"generated_password,omitempty"`
@@ -213,8 +217,10 @@ func (a *App) runCreate(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.Stdout, "View URL:   %s\n", res.ViewURL)
 	}
 	fmt.Fprintf(a.Stdout, "Delete URL: %s\n", res.DeleteURL)
-	if generatedPW != "" {
-		fmt.Fprintf(a.Stdout, "Password:   %s\n", generatedPW)
+	if generatePassword && len(password) > 0 {
+		_, _ = io.WriteString(a.Stdout, "Password:   ")
+		_, _ = a.Stdout.Write(password)
+		_, _ = io.WriteString(a.Stdout, "\n")
 	}
 	if !res.ExpiresAt.IsZero() {
 		fmt.Fprintf(a.Stderr, "Expires at %s (%d encrypted bytes)\n", res.ExpiresAt.UTC().Format("2006-01-02 15:04:05 UTC"), res.TotalSize)

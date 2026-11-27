@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,6 +38,8 @@ func (c *Client) Read(ctx context.Context, vl *link.ViewLink, opts ReadOptions) 
 		expiresIn      *int
 		resolvedPW     []byte
 		hasPassword    bool
+		peekedPrefix   format.Prefix
+		hasPeeked      bool
 		isBurn         = vl.Burn
 	)
 	defer func() {
@@ -48,6 +51,8 @@ func (c *Client) Read(ctx context.Context, vl *link.ViewLink, opts ReadOptions) 
 		if err != nil {
 			return nil, err
 		}
+		peekedPrefix = prefix
+		hasPeeked = true
 
 		if opts.BeforeBurn != nil {
 			if err := opts.BeforeBurn(prefix); err != nil {
@@ -155,6 +160,11 @@ func (c *Client) Read(ctx context.Context, vl *link.ViewLink, opts ReadOptions) 
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
+	}
+	if hasPeeked && !bytes.Equal(opened.Prefix.Raw[:], peekedPrefix.Raw[:]) {
+		_ = opened.Close()
+		_ = resp.Body.Close()
+		return nil, &format.PasteError{Code: format.CodeTampered, Message: "paste header does not match peeked prefix"}
 	}
 	hasPassword = opened.Prefix.Password
 
@@ -325,20 +335,25 @@ func newStallReader(ctx context.Context, body io.ReadCloser, timeout time.Durati
 
 func (s *stallReader) Read(p []byte) (int, error) {
 	type res struct {
-		n   int
-		err error
+		data []byte
+		err  error
 	}
+	// Read into a goroutine-owned buffer so cancelling or timing out never races
+	// with the caller reusing or zeroing p.
+	buf := make([]byte, len(p))
 	ch := make(chan res, 1)
 	go func() {
-		n, err := s.body.Read(p)
-		ch <- res{n, err}
+		n, err := s.body.Read(buf)
+		ch <- res{buf[:n], err}
 	}()
 
 	timer := time.NewTimer(s.timeout)
 	defer timer.Stop()
 	select {
 	case r := <-ch:
-		return r.n, r.err
+		n := copy(p, r.data)
+		clear(buf)
+		return n, r.err
 	case <-timer.C:
 		_ = s.body.Close()
 		return 0, errors.New("download stalled: no data received before timeout")

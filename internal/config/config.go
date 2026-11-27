@@ -1,5 +1,6 @@
 // Package config loads and validates ~/.config/nullbin/config.json with strict
-// permission and symlink checks (fail-closed, never hardcodes a default server).
+// permission, os.Root confinement, and symlink checks (fail-closed, never
+// hardcodes a default server).
 package config
 
 import (
@@ -35,12 +36,48 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".config", "nullbin", "config.json"), nil
 }
 
-// Load reads and validates a config file. If the file does not exist, an empty
-// Config and nil error are returned. Symlinks, non-regular files, unknown JSON
-// fields, invalid origins, and insecure POSIX permissions (> 0600) fail closed.
+func validateOriginPair(serverOrigin, apiOrigin string) error {
+	if serverOrigin != "" && apiOrigin != "" &&
+		strings.HasPrefix(serverOrigin, "https://") && strings.HasPrefix(apiOrigin, "http://") {
+		return errors.New("refusing plain HTTP API origin for an HTTPS server")
+	}
+	return nil
+}
+
+// Load reads and validates a config file using os.Root directory confinement.
+// If the file or its directory does not exist, an empty Config and nil error
+// are returned. Symlinks, non-regular files, unknown JSON fields, invalid or
+// downgraded origins, world-writable parent dirs, and insecure POSIX
+// permissions (> 0600) fail closed.
 func Load(path string) (Config, error) {
 	var cfg Config
-	info, err := os.Lstat(path)
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("stat config directory %s: %w", dir, err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 {
+		return cfg, fmt.Errorf("refusing to read config directory %s: symbolic links are not allowed", dir)
+	}
+	if !dirInfo.IsDir() {
+		return cfg, fmt.Errorf("config path parent %s is not a directory", dir)
+	}
+	if runtime.GOOS != "windows" && dirInfo.Mode().Perm()&0o002 != 0 {
+		return cfg, fmt.Errorf("config directory %s is world-writable (%04o); run: chmod 700 %s", dir, dirInfo.Mode().Perm(), dir)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return cfg, fmt.Errorf("open config directory %s: %w", dir, err)
+	}
+	defer root.Close()
+
+	info, err := root.Lstat(base)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return cfg, nil
@@ -60,7 +97,7 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	f, err := os.Open(path)
+	f, err := root.Open(base)
 	if err != nil {
 		return cfg, fmt.Errorf("open config %s: %w", path, err)
 	}
@@ -110,10 +147,13 @@ func Load(path string) (Config, error) {
 		}
 		cfg.API = origin
 	}
+	if err := validateOriginPair(cfg.Server, cfg.API); err != nil {
+		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
+	}
 	return cfg, nil
 }
 
-// Save writes cfg atomically with mode 0600 (parent dir 0700).
+// Save writes cfg atomically with mode 0600 (parent dir 0700) inside os.Root.
 func Save(path string, cfg Config) error {
 	if cfg.Server != "" {
 		origin, err := link.ValidateOrigin(cfg.Server)
@@ -129,11 +169,25 @@ func Save(path string, cfg Config) error {
 		}
 		cfg.API = origin
 	}
+	if err := validateOriginPair(cfg.Server, cfg.API); err != nil {
+		return err
+	}
 
 	dir := filepath.Dir(path)
+	base := filepath.Base(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if info, err := root.Lstat(base); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symbolic link %s", path)
+	}
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -144,30 +198,35 @@ func Save(path string, cfg Config) error {
 	if _, err := rand.Read(rnd[:]); err != nil {
 		return err
 	}
-	tmpPath := filepath.Join(dir, ".config-tmp-"+hex.EncodeToString(rnd[:]))
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	tmpName := ".config-tmp-" + hex.EncodeToString(rnd[:])
+	f, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.Remove(tmpPath)
+			_ = f.Close()
+			_ = root.Remove(tmpName)
 		}
 	}()
 	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
+	if runtime.GOOS == "windows" {
+		if err := os.Rename(filepath.Join(dir, tmpName), filepath.Join(dir, base)); err != nil {
+			return err
+		}
+	} else {
+		if err := root.Rename(tmpName, base); err != nil {
+			return err
+		}
 	}
 	committed = true
 	return nil
@@ -208,7 +267,7 @@ func ResolveServer(flagServer, flagAPI, envServer, envAPI string, cfg Config) (s
 			apiOrigin = cfg.API
 		}
 	default:
-		return "", "", errors.New("no Nullbin server configured: pass --server <origin>, set NULLBIN_SERVER, or configure ~/.config/nullbin/config.json")
+		return "", "", errors.New("no Nullbin server configured: pass --server <host>, set NULLBIN_SERVER, or configure ~/.config/nullbin/config.json")
 	}
 
 	serverOrigin, err = link.ValidateOrigin(serverOrigin)
@@ -220,6 +279,9 @@ func ResolveServer(flagServer, flagAPI, envServer, envAPI string, cfg Config) (s
 		if err != nil {
 			return "", "", fmt.Errorf("invalid API origin: %w", err)
 		}
+	}
+	if err := validateOriginPair(serverOrigin, apiOrigin); err != nil {
+		return "", "", err
 	}
 	return serverOrigin, apiOrigin, nil
 }
