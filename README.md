@@ -10,7 +10,7 @@ For hosting a server, protocol specifications, and paste limits, see [`Nulliance
 
 | I want to… | Go to |
 |---|---|
-| Install `nullbin-cli` | [Install](#install) |
+| Install or update `nullbin-cli` | [Install](#install) and [Update](#update) |
 | Point it at my Nullbin server | [Choose a server](#choose-a-server) |
 | Create, read, or delete pastes | [Using nullbin-cli](#using-nullbin-cli) |
 | Embed Nullbin in a Go app | [Go library](#go-library) |
@@ -58,6 +58,14 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=v0.1.
 ```
 
 </details>
+
+## Update
+
+`nullbin-cli` never auto-updates or checks for updates in the background. To stay notified of security releases, choose **Watch → Custom → Releases** on this repository. Check your installed version with `nullbin-cli version`, then update using whichever method you used to install:
+
+- **Release binary:** download the new binary, `SHA256SUMS`, and `SHA256SUMS.sigstore.json` from the [Releases page](https://github.com/Nulliance/nullbin-cli/releases), verify them with `cosign` and `sha256sum` as above, and replace your existing binary.
+- **Installed with Go:** re-run `go install github.com/Nulliance/nullbin-cli/cmd/nullbin-cli@latest`.
+- **Built from source:** run `git fetch --tags`, `git checkout --detach refs/tags/vX.Y.Z`, and rebuild.
 
 ## Choose a server
 
